@@ -6,7 +6,7 @@ license.workspace = true
 description = "Binaire Bevy : UI, orchestration, plugins. Seule crate autorisée à dépendre de Bevy."
 
 [[bin]]
-name = "dj-mix"
+name = "ober"
 path = "src/main.rs"
 
 [dependencies]

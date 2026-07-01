@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use decode::{CHANNELS, TARGET_SAMPLE_RATE, decode_file};
 
 fn tmp_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("dj-mix-decode-{}-{name}", std::process::id()))
+    std::env::temp_dir().join(format!("ober-decode-{}-{name}", std::process::id()))
 }
 
 fn write_wav(path: &PathBuf, rate: u32, channels: u16, seconds: f32, freq: f32) {

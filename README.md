@@ -1,4 +1,4 @@
-# dj-mix
+# ober
 
 Logiciel de mix DJ open-source en Rust. POC : moteur 2 decks à faible latence,
 contrôlé intégralement par un **Hercules DJControl Inpulse 200 MK2** (MIDI
@@ -43,7 +43,7 @@ Benchmark du callback audio et rendu offline d'écoute :
 
 ```sh
 cargo bench -p engine --bench callback
-DJ_MIX_WRITE_WAV=1 cargo test -p engine --test offline_render  # WAV dans target/
+OBER_WRITE_WAV=1 cargo test -p engine --test offline_render  # WAV dans target/
 ```
 
 ## Architecture

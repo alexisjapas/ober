@@ -37,7 +37,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: format!("dj-mix {}", env!("CARGO_PKG_VERSION")),
+                title: format!("ober {}", env!("CARGO_PKG_VERSION")),
                 ..Default::default()
             }),
             ..Default::default()
@@ -116,7 +116,7 @@ fn setup(mut commands: Commands) {
         .map(PathBuf::from)
         .collect();
     if paths.is_empty() {
-        info!("aucune piste en argument — usage : dj-mix <piste_a> [piste_b]");
+        info!("aucune piste en argument — usage : ober <piste_a> [piste_b]");
     }
     for (i, path) in paths.into_iter().enumerate() {
         let deck = Deck::ALL[i];
@@ -315,7 +315,7 @@ fn update_status(
     };
 
     let title = format!(
-        "dj-mix — A {} | B {} | xf {:+.2} | master {:.2} | underruns {} | charge audio {:.0} %",
+        "ober — A {} | B {} | xf {:+.2} | master {:.2} | underruns {} | charge audio {:.0} %",
         deck_status(0),
         deck_status(1),
         mix.crossfader,

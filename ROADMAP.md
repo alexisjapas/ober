@@ -1,4 +1,4 @@
-# Roadmap — dj-mix (POC v0.1)
+# Roadmap — ober (POC v0.1)
 
 Référence : [docs/SPECS.md](docs/SPECS.md) (specs v0.2). Chaque jalon a un
 objectif démontrable et un **critère de sortie mesurable** ; on n'entame pas un
@@ -46,7 +46,7 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 - [x] Feature `rt-checks` : allocateur traqué `assert_no_alloc` + panique sur allocation dans le callback en debug (§7)
 - [x] Instrumentation : underruns (dépassements de budget + erreurs de stream) et charge du callback lissée, dans le snapshot (§3.6)
 - [x] `app` : chargement CLI (2 pistes), workers de décodage, play/pause/seek/volumes/crossfader/master au clavier, état dans le titre de fenêtre
-- [x] Tests : rendu offline du graphe (mêmes structs, hors cpal) — 5 tests d'intégration + WAV d'écoute optionnel (`DJ_MIX_WRITE_WAV=1`) ; les WAV de non-régression « golden » attendront un DSP stabilisé (M2)
+- [x] Tests : rendu offline du graphe (mêmes structs, hors cpal) — 5 tests d'intégration + WAV d'écoute optionnel (`OBER_WRITE_WAV=1`) ; les WAV de non-régression « golden » attendront un DSP stabilisé (M2)
 - [x] Bench criterion : ~665 ns pour 2 decks à 128 frames, soit ~0,03 % du budget (cible < 20 %) (§7)
 - [x] Méthode de mesure de latence documentée (`docs/latence.md`) ; buffer logiciel 256 frames = 5,33 ms
 - [ ] **Validation matérielle** : session d'écoute réelle (2 pistes, aucun underrun affiché) et mesure de latence physique ≤ 10 ms — à faire sur la machine avec sortie audio active

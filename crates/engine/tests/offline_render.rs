@@ -1,6 +1,6 @@
 //! Test d'intégration : rendu offline du graphe audio — mêmes structs que le
 //! callback cpal, appelées hors cpal (specs §7). Poser
-//! `DJ_MIX_WRITE_WAV=1` pour écrire les rendus dans `target/` et les écouter.
+//! `OBER_WRITE_WAV=1` pour écrire les rendus dans `target/` et les écouter.
 
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ fn render(graph: &mut AudioGraph, blocks: usize) -> Vec<f32> {
 }
 
 fn write_wav_if_asked(name: &str, samples: &[f32]) {
-    if std::env::var_os("DJ_MIX_WRITE_WAV").is_none() {
+    if std::env::var_os("OBER_WRITE_WAV").is_none() {
         return;
     }
     let spec = hound::WavSpec {

@@ -21,7 +21,7 @@ pub struct RawMidiEvent {
 /// Liste les ports MIDI d'entrée visibles. Utilisé par l'app (détection du
 /// contrôleur via `device_match`) et par l'outil `midi-probe`.
 pub fn list_input_ports() -> Result<Vec<String>, midir::InitError> {
-    let input = midir::MidiInput::new("dj-mix")?;
+    let input = midir::MidiInput::new("ober")?;
     Ok(input
         .ports()
         .iter()

@@ -67,7 +67,7 @@ impl Engine {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
         let thread = std::thread::Builder::new()
-            .name("dj-mix-audio".into())
+            .name("ober-audio".into())
             .spawn(move || audio_thread(graph, &ready_tx, &shutdown_rx))
             .map_err(|e| EngineError::Thread(e.to_string()))?;
 

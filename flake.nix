@@ -1,5 +1,5 @@
 {
-  description = "dj-mix — logiciel de mix DJ open-source (Rust + Bevy), POC Hercules DJControl Inpulse 200 MK2";
+  description = "ober — logiciel de mix DJ open-source (Rust + Bevy), POC Hercules DJControl Inpulse 200 MK2";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

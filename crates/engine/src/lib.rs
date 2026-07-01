@@ -1,4 +1,4 @@
-//! Moteur audio temps réel de dj-mix.
+//! Moteur audio temps réel d'ober.
 //!
 //! Cette crate ne dépend JAMAIS de Bevy (frontière architecturale, specs
 //! §1.4/§2.4, vérifiée en CI par `scripts/check-bevy-boundary.sh`). Elle doit
