@@ -38,17 +38,18 @@ M4 demande des itérations à l'oreille avec le matériel physique.
 
 Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par défaut.
 
-- [ ] `decode` : symphonia (probe → packets) → f32 entrelacé ; `rubato` `SincFixedIn` → 48 kHz ; mono→stéréo ; fichiers tronqués tolérés et signalés (§4.1)
-- [ ] `engine` : état de deck (buffer, position, gain), mixer (volumes, crossfader constant power), gain master (§3.3)
-- [ ] Stream cpal stéréo, buffer cible 128–256 samples, fallback 512 (§3.1)
-- [ ] Canaux inter-threads (§2.3) : commandes `rtrb` UI→audio ; snapshots `triple_buffer` audio→UI ; tap audio ; **canal de récupération mémoire** (jamais de `drop` dans le callback)
-- [ ] `SwapTrackBuffer` par échange de pointeur/`Arc` pré-construit, sans copie (§3.4)
-- [ ] Feature `rt-checks` : `assert_no_alloc` armé autour du callback en debug (§7)
-- [ ] Instrumentation : compteur d'underruns + mesure du temps de callback, exposés dans le snapshot (§3.6)
-- [ ] `app` : chargement de pistes (arguments CLI suffisants à ce stade), play/pause/seek/volumes/crossfader au clavier
-- [ ] Tests : rendu offline du graphe (mêmes structs, hors cpal) → WAV de non-régression (§7)
-- [ ] Bench criterion : coût du callback 2 decks actifs à 128 samples, budget < 20 % du temps réel (§7)
-- [ ] Documenter la mesure de latence ALSA (méthode + résultat) dans `docs/`
+- [x] `decode` : symphonia 0.6 (probe → packets) → f32 entrelacé ; rubato 3 (`Async` sinc = ex-`SincFixedIn`) → 48 kHz ; mono→stéréo ; fichiers tronqués tolérés et signalés (§4.1)
+- [x] `engine` : état de deck (buffer, position f64, gain), mixer (volumes, crossfader constant power), gain master (§3.3)
+- [x] Stream cpal stéréo, buffer cible 256 frames clampé à la plage du périphérique (fallback 512 inclus) (§3.1)
+- [x] Canaux inter-threads (§2.3) : commandes `rtrb` UI→audio ; snapshots `triple_buffer` audio→UI ; tap audio (bloc entier ou rien) ; **canal de récupération mémoire** (jamais de désallocation dans le callback, l'UI garde un clone de chaque Arc)
+- [x] `SwapTrackBuffer` par échange d'`Arc<TrackBuffer>` pré-construit, sans copie (§3.4)
+- [x] Feature `rt-checks` : allocateur traqué `assert_no_alloc` + panique sur allocation dans le callback en debug (§7)
+- [x] Instrumentation : underruns (dépassements de budget + erreurs de stream) et charge du callback lissée, dans le snapshot (§3.6)
+- [x] `app` : chargement CLI (2 pistes), workers de décodage, play/pause/seek/volumes/crossfader/master au clavier, état dans le titre de fenêtre
+- [x] Tests : rendu offline du graphe (mêmes structs, hors cpal) — 5 tests d'intégration + WAV d'écoute optionnel (`DJ_MIX_WRITE_WAV=1`) ; les WAV de non-régression « golden » attendront un DSP stabilisé (M2)
+- [x] Bench criterion : ~665 ns pour 2 decks à 128 frames, soit ~0,03 % du budget (cible < 20 %) (§7)
+- [x] Méthode de mesure de latence documentée (`docs/latence.md`) ; buffer logiciel 256 frames = 5,33 ms
+- [ ] **Validation matérielle** : session d'écoute réelle (2 pistes, aucun underrun affiché) et mesure de latence physique ≤ 10 ms — à faire sur la machine avec sortie audio active
 
 **Sortie** : mix 2 pistes sans underrun, latence mesurée ≤ 10 ms.
 

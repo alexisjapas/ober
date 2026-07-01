@@ -16,13 +16,34 @@ L'environnement de développement est géré par un flake nix :
 ```sh
 nix develop            # ou `direnv allow` si vous utilisez direnv
 cargo test --workspace
-cargo run -p app       # binaire `dj-mix` (M0 : fenêtre vide)
+cargo run -p app -- piste_a.mp3 piste_b.flac   # mix 2 decks au clavier (M1)
 ```
+
+Contrôles clavier du M1 (positions physiques, étiquettes QWERTY) — le
+contrôleur MIDI arrive au M3, l'UI complète au M6 (l'état vit dans le titre
+de la fenêtre en attendant) :
+
+| Touche              | Action                     |
+|---------------------|----------------------------|
+| `Espace` / `Entrée` | play/pause deck A / deck B |
+| `A` `D`             | seek deck A −5 s / +5 s    |
+| `←` `→`             | seek deck B −5 s / +5 s    |
+| `W` `S`             | volume deck A + / −        |
+| `↑` `↓`             | volume deck B + / −        |
+| `C` `V`             | crossfader vers A / vers B |
+| `-` `=`             | gain master − / +          |
 
 Outil de rétro-ingénierie MIDI (logge tous les messages entrants) :
 
 ```sh
 cargo run -p midi --bin midi-probe
+```
+
+Benchmark du callback audio et rendu offline d'écoute :
+
+```sh
+cargo bench -p engine --bench callback
+DJ_MIX_WRITE_WAV=1 cargo test -p engine --test offline_render  # WAV dans target/
 ```
 
 ## Architecture

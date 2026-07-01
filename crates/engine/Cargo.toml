@@ -13,10 +13,16 @@ rt-checks = ["dep:assert_no_alloc"]
 cpal.workspace = true
 rtrb.workspace = true
 triple_buffer.workspace = true
+thiserror.workspace = true
 assert_no_alloc = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+hound.workspace = true
+
+[[bench]]
+name = "callback"
+harness = false
 
 [lints]
 workspace = true

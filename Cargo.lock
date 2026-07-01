@@ -2517,6 +2517,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 name = "decode"
 version = "0.1.0-dev"
 dependencies = [
+ "hound",
  "rubato",
  "symphonia",
  "thiserror 2.0.18",
@@ -2660,7 +2661,9 @@ dependencies = [
  "assert_no_alloc",
  "cpal 0.18.1",
  "criterion",
+ "hound",
  "rtrb",
+ "thiserror 2.0.18",
  "triple_buffer",
 ]
 
@@ -3199,6 +3202,12 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hound"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
 name = "icu_collections"

@@ -58,6 +58,7 @@ anyhow = "1.0.103"
 
 # --- dev / bench ---
 criterion = "0.8.2"
+hound = "3.5.1"     # lecture/écriture WAV dans les tests uniquement
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

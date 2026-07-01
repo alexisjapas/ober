@@ -7,9 +7,12 @@ pub struct DeckSnapshot {
     pub playing: bool,
     /// Position de lecture dans la piste, en samples (48 kHz).
     pub position_samples: u64,
-    /// Vitesse de lecture courante (1.0 = nominale). Sert à l'extrapolation
-    /// de la position affichée entre deux snapshots (specs §6.1).
+    /// Longueur de la piste chargée, en samples (0 = pas de piste).
+    pub track_frames: u64,
+    /// Vitesse de lecture courante (1.0 = nominale, 0.0 = à l'arrêt). Sert à
+    /// l'extrapolation de la position affichée entre snapshots (specs §6.1).
     pub speed: f64,
+    /// Niveaux du deck après gain et crossfader, par canal, sur le dernier bloc.
     pub rms: [f32; 2],
     pub peak: [f32; 2],
 }
@@ -19,9 +22,11 @@ pub struct EngineSnapshot {
     pub decks: [DeckSnapshot; 2],
     pub master_rms: [f32; 2],
     pub master_peak: [f32; 2],
-    /// Compteur cumulé d'underruns (specs §3.6), affiché dans la barre d'état.
+    /// Compteur cumulé : erreurs de stream cpal + callbacks ayant dépassé
+    /// leur budget temps (specs §3.6). Affiché dans la barre d'état.
     pub underruns: u64,
-    /// Fraction du budget temps du callback consommée `[0, 1]` ; budget < 20 %.
+    /// Fraction du budget temps du callback consommée, lissée `[0, 1+]` ;
+    /// l'objectif est < 0,20 (specs §3.6).
     pub callback_load: f32,
 }
 
