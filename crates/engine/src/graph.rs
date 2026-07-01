@@ -2,15 +2,23 @@
 //! callback cpal, et par les tests/benchs en rendu offline (mêmes structs,
 //! specs §7). Tout ce module respecte les règles §2.2 : aucune allocation,
 //! aucun lock, aucune I/O après construction.
+//!
+//! Chaîne par deck (specs §3.3) :
+//!
+//! ```text
+//! piste → varispeed (Hermite 4 pts) → EQ 3 bandes → gain deck ─┬→ ×crossfader → Σ master → ×gain → soft-clip → out 1/2
+//!                                        [tap cue si activé] ──┴→ Σ cue ──→ mix cue/master → ×gain casque → soft-clip → out 3/4
+//! ```
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::command::EngineCommand;
+use crate::dsp::{StereoEq, hermite4, soft_clip};
 use crate::snapshot::EngineSnapshot;
 use crate::track::TrackBuffer;
-use crate::{CHANNELS, Deck};
+use crate::{CHANNELS, Deck, MAX_BLOCK_FRAMES, MAX_PITCH_RATIO};
 
 const COMMAND_CAPACITY: usize = 1024;
 const RECLAIM_CAPACITY: usize = 64;
@@ -26,17 +34,20 @@ pub struct EnginePorts {
     pub snapshots: triple_buffer::Output<EngineSnapshot>,
     /// Buffers de piste renvoyés par le callback, à désallouer ici.
     pub reclaim: rtrb::Consumer<Arc<TrackBuffer>>,
-    /// Samples post-mix pour les analyseurs temps réel (VU/FFT, M5).
+    /// Samples master post-limiteur pour les analyseurs temps réel (M5).
     pub tap: rtrb::Consumer<f32>,
 }
 
 struct DeckState {
     track: Option<Arc<TrackBuffer>>,
-    /// Position en frames. f64 : prêt pour la lecture fractionnaire du
-    /// varispeed (M2) sans changer la structure.
+    /// Position en frames, fractionnaire (lecture varispeed).
     position: f64,
+    /// Vitesse de lecture (1.0 = nominale), clampée à ±16 %.
+    speed: f64,
     playing: bool,
+    cue: bool,
     volume: f32,
+    eq: StereoEq,
 }
 
 impl Default for DeckState {
@@ -44,8 +55,11 @@ impl Default for DeckState {
         Self {
             track: None,
             position: 0.0,
+            speed: 1.0,
             playing: false,
+            cue: false,
             volume: 1.0,
+            eq: StereoEq::default(),
         }
     }
 }
@@ -54,6 +68,14 @@ pub struct AudioGraph {
     decks: [DeckState; 2],
     crossfader: f32,
     master_gain: f32,
+    /// Balance casque : 0.0 = cue seul, 1.0 = master seul.
+    cue_mix: f32,
+    headphone_gain: f32,
+    /// 2 (master seul) ou 4 (master + casque), fixé avant le stream.
+    output_channels: usize,
+    /// Scratch pré-alloués (stéréo, MAX_BLOCK_FRAMES) — jamais réalloués.
+    master_buf: Vec<f32>,
+    cue_buf: Vec<f32>,
     snapshot: EngineSnapshot,
     /// Callbacks ayant dépassé leur budget temps.
     budget_overruns: u64,
@@ -78,6 +100,11 @@ impl AudioGraph {
             decks: [DeckState::default(), DeckState::default()],
             crossfader: 0.0,
             master_gain: 1.0,
+            cue_mix: 0.5,
+            headphone_gain: 1.0,
+            output_channels: CHANNELS,
+            master_buf: vec![0.0; MAX_BLOCK_FRAMES * CHANNELS],
+            cue_buf: vec![0.0; MAX_BLOCK_FRAMES * CHANNELS],
             snapshot: EngineSnapshot::default(),
             budget_overruns: 0,
             commands: commands_rx,
@@ -101,61 +128,81 @@ impl AudioGraph {
         Arc::clone(&self.stream_errors)
     }
 
-    /// Remplit `out` (stéréo entrelacé) avec le mix des decks. Appelable
-    /// depuis le callback cpal comme depuis un rendu offline.
+    /// Nombre de canaux du stream de sortie : 2 (master seul) ou 4 (master
+    /// 1/2 + casque 3/4). À fixer avant de démarrer le stream, jamais depuis
+    /// le callback.
+    pub fn set_output_channels(&mut self, channels: usize) {
+        assert!(channels == 2 || channels == 4, "2 ou 4 canaux");
+        self.output_channels = channels;
+    }
+
+    /// Remplit `out` (entrelacé, `output_channels` canaux) avec le mix.
+    /// Appelable depuis le callback cpal comme depuis un rendu offline.
     pub fn process(&mut self, out: &mut [f32]) {
         self.drain_commands();
         out.fill(0.0);
 
-        let frames = out.len() / CHANNELS;
+        let channels = self.output_channels;
+        let frames = (out.len() / channels).min(MAX_BLOCK_FRAMES);
+
+        let master = &mut self.master_buf[..frames * 2];
+        let cue = &mut self.cue_buf[..frames * 2];
+        master.fill(0.0);
+        cue.fill(0.0);
+
         let xf = crossfader_gains(self.crossfader);
 
         let decks = &mut self.decks;
         let deck_snapshots = &mut self.snapshot.decks;
         for ((deck, snap), xf_gain) in decks.iter_mut().zip(deck_snapshots.iter_mut()).zip(xf) {
-            let mut sum_sq = [0.0f32; CHANNELS];
-            let mut peak = [0.0f32; CHANNELS];
+            let mut sum_sq = [0.0f32; 2];
+            let mut peak = [0.0f32; 2];
 
             if let Some(track) = deck.track.as_ref()
                 && deck.playing
             {
-                let gain = deck.volume * xf_gain;
-                let total = track.frames();
-                let mut pos = deck.position as usize;
-                for frame in out.chunks_exact_mut(CHANNELS) {
-                    if pos >= total {
+                let gain = deck.volume;
+                for i in 0..frames {
+                    let Some((l, r)) = varispeed_frame(track, &mut deck.position, deck.speed)
+                    else {
                         deck.playing = false;
                         break;
+                    };
+                    // EQ 3 bandes puis gain deck (chaîne §3.3).
+                    let dl = deck.eq.process(0, l) * gain;
+                    let dr = deck.eq.process(1, r) * gain;
+                    // Tap cue : post-gain deck, pré-crossfader.
+                    if deck.cue {
+                        cue[i * 2] += dl;
+                        cue[i * 2 + 1] += dr;
                     }
-                    let (l, r) = track.frame(pos);
-                    let (sl, sr) = (l * gain, r * gain);
-                    frame[0] += sl;
-                    frame[1] += sr;
-                    sum_sq[0] += sl * sl;
-                    sum_sq[1] += sr * sr;
-                    peak[0] = peak[0].max(sl.abs());
-                    peak[1] = peak[1].max(sr.abs());
-                    pos += 1;
+                    let (ml, mr) = (dl * xf_gain, dr * xf_gain);
+                    master[i * 2] += ml;
+                    master[i * 2 + 1] += mr;
+                    sum_sq[0] += ml * ml;
+                    sum_sq[1] += mr * mr;
+                    peak[0] = peak[0].max(ml.abs());
+                    peak[1] = peak[1].max(mr.abs());
                 }
-                deck.position = pos as f64;
             }
 
             let n = frames.max(1) as f32;
             snap.playing = deck.playing;
+            snap.cue = deck.cue;
             snap.position_samples = deck.position as u64;
             snap.track_frames = deck.track.as_ref().map_or(0, |t| t.frames() as u64);
-            snap.speed = if deck.playing { 1.0 } else { 0.0 };
+            snap.speed = if deck.playing { deck.speed } else { 0.0 };
             snap.rms = [(sum_sq[0] / n).sqrt(), (sum_sq[1] / n).sqrt()];
             snap.peak = peak;
         }
 
-        // Gain master. Le limiteur soft-clip (obligatoire, specs §3.3)
-        // arrive au M2 avec le reste du DSP.
-        let mut sum_sq = [0.0f32; CHANNELS];
-        let mut peak = [0.0f32; CHANNELS];
-        for frame in out.chunks_exact_mut(CHANNELS) {
-            frame[0] *= self.master_gain;
-            frame[1] *= self.master_gain;
+        // Master : gain puis limiteur soft-clip (obligatoire, specs §3.3).
+        let master_gain = self.master_gain;
+        let mut sum_sq = [0.0f32; 2];
+        let mut peak = [0.0f32; 2];
+        for frame in master.chunks_exact_mut(2) {
+            frame[0] = soft_clip(frame[0] * master_gain);
+            frame[1] = soft_clip(frame[1] * master_gain);
             sum_sq[0] += frame[0] * frame[0];
             sum_sq[1] += frame[1] * frame[1];
             peak[0] = peak[0].max(frame[0].abs());
@@ -165,10 +212,30 @@ impl AudioGraph {
         self.snapshot.master_rms = [(sum_sq[0] / n).sqrt(), (sum_sq[1] / n).sqrt()];
         self.snapshot.master_peak = peak;
 
-        // Tap post-mix : bloc entier ou rien, pour préserver l'alignement
-        // des canaux côté analyseurs.
-        if self.tap.slots() >= out.len() {
-            for &s in out.iter() {
+        // Écriture vers le périphérique.
+        if channels == 4 {
+            // out 1/2 = master ; out 3/4 = casque (cue mix, specs §3.3) :
+            // hp = gain casque × ((1 − mix) × cue + mix × master), limité.
+            let mix = self.cue_mix;
+            let hp_gain = self.headphone_gain;
+            for i in 0..frames {
+                let (ml, mr) = (master[i * 2], master[i * 2 + 1]);
+                let hl = soft_clip(hp_gain * ((1.0 - mix) * cue[i * 2] + mix * ml));
+                let hr = soft_clip(hp_gain * ((1.0 - mix) * cue[i * 2 + 1] + mix * mr));
+                let frame = &mut out[i * 4..i * 4 + 4];
+                frame[0] = ml;
+                frame[1] = mr;
+                frame[2] = hl;
+                frame[3] = hr;
+            }
+        } else {
+            out[..frames * 2].copy_from_slice(master);
+        }
+
+        // Tap master post-limiteur : bloc entier ou rien, pour préserver
+        // l'alignement des canaux côté analyseurs.
+        if self.tap.slots() >= master.len() {
+            for &s in master.iter() {
                 let _ = self.tap.push(s);
             }
         }
@@ -212,6 +279,18 @@ impl AudioGraph {
                 }
                 EngineCommand::SetCrossfader(x) => self.crossfader = x.clamp(-1.0, 1.0),
                 EngineCommand::SetMasterGain(g) => self.master_gain = g.clamp(0.0, 2.0),
+                EngineCommand::SetPitch(d, speed) => {
+                    self.deck_mut(d).speed =
+                        speed.clamp(1.0 - MAX_PITCH_RATIO, 1.0 + MAX_PITCH_RATIO);
+                }
+                EngineCommand::SetEq(d, band, coeffs) => {
+                    self.deck_mut(d).eq.set_band(band, coeffs);
+                }
+                EngineCommand::SetCueEnabled(d, on) => self.deck_mut(d).cue = on,
+                EngineCommand::SetCueMix(x) => self.cue_mix = x.clamp(0.0, 1.0),
+                EngineCommand::SetHeadphoneGain(g) => {
+                    self.headphone_gain = g.clamp(0.0, 2.0);
+                }
                 EngineCommand::SwapTrackBuffer(d, track) => {
                     let deck = self.deck_mut(d);
                     let old = deck.track.replace(track);
@@ -243,6 +322,29 @@ impl AudioGraph {
             let _ = self.reclaim.push(old);
         }
     }
+}
+
+/// Lecture d'une frame à position fractionnaire, interpolation Hermite
+/// 4 points (specs §3.3/§3.5). Avance `position` de `speed`. `None` en fin
+/// de piste. Les voisins hors bornes sont clampés aux extrémités.
+#[inline]
+fn varispeed_frame(track: &TrackBuffer, position: &mut f64, speed: f64) -> Option<(f32, f32)> {
+    let total = track.frames();
+    let idx = *position as usize;
+    if idx >= total {
+        return None;
+    }
+    let t = (*position - idx as f64) as f32;
+    let neighbor = |offset: isize| -> (f32, f32) {
+        let j = (idx as isize + offset).clamp(0, total as isize - 1) as usize;
+        track.frame(j)
+    };
+    let (lm1, rm1) = neighbor(-1);
+    let (l0, r0) = neighbor(0);
+    let (l1, r1) = neighbor(1);
+    let (l2, r2) = neighbor(2);
+    *position += speed;
+    Some((hermite4(lm1, l0, l1, l2, t), hermite4(rm1, r0, r1, r2, t)))
 }
 
 /// Loi constant power (specs §3.3). `x` ∈ [-1, 1] → gains (deck A, deck B).
@@ -282,9 +384,24 @@ mod tests {
             .commands
             .push(EngineCommand::SetMasterGain(-3.0))
             .unwrap();
+        ports
+            .commands
+            .push(EngineCommand::SetPitch(Deck::A, 3.0))
+            .unwrap();
         let mut out = [0.0f32; 8];
         graph.process(&mut out);
         assert_eq!(graph.crossfader, 1.0);
         assert_eq!(graph.master_gain, 0.0);
+        assert_eq!(graph.decks[0].speed, 1.0 + MAX_PITCH_RATIO);
+    }
+
+    #[test]
+    fn varispeed_avance_a_la_vitesse_demandee() {
+        let track = TrackBuffer::new(vec![0.0; 48_000 * 2]);
+        let mut position = 0.0;
+        for _ in 0..100 {
+            varispeed_frame(&track, &mut position, 1.08);
+        }
+        assert!((position - 108.0).abs() < 1e-9);
     }
 }

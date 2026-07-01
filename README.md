@@ -23,15 +23,24 @@ Contrôles clavier du M1 (positions physiques, étiquettes QWERTY) — le
 contrôleur MIDI arrive au M3, l'UI complète au M6 (l'état vit dans le titre
 de la fenêtre en attendant) :
 
-| Touche              | Action                     |
-|---------------------|----------------------------|
-| `Espace` / `Entrée` | play/pause deck A / deck B |
-| `A` `D`             | seek deck A −5 s / +5 s    |
-| `←` `→`             | seek deck B −5 s / +5 s    |
-| `W` `S`             | volume deck A + / −        |
-| `↑` `↓`             | volume deck B + / −        |
-| `C` `V`             | crossfader vers A / vers B |
-| `-` `=`             | gain master − / +          |
+| Touche              | Action                       |
+|---------------------|------------------------------|
+| `Espace` / `Entrée` | play/pause deck A / deck B   |
+| `A` `D`             | seek deck A −5 s / +5 s      |
+| `←` `→`             | seek deck B −5 s / +5 s      |
+| `W` `S`             | volume deck A + / −          |
+| `↑` `↓`             | volume deck B + / −          |
+| `C` `V`             | crossfader vers A / vers B   |
+| `-` `=`             | gain master − / +            |
+| `1` / `2`           | cue casque deck A / deck B   |
+| `Q` `E`, `U` `O`    | pitch A − / +, pitch B − / + |
+| `R` / `P`           | reset pitch A / B            |
+| `N` `M`             | mix casque cue ↔ master      |
+| `J` `K`             | gain casque − / +            |
+
+Audio : détection automatique d'un périphérique « DJControl » (stream
+4 canaux master + casque s'il le supporte), sinon périphérique par défaut en
+stéréo. Configurable via `ober.config.ron` (voir `ober.config.example.ron`).
 
 Outil de rétro-ingénierie MIDI (logge tous les messages entrants) :
 

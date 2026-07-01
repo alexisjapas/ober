@@ -1,11 +1,13 @@
 //! Bench criterion : coût du chemin critique du callback pour 2 decks actifs
-//! à 128 frames (specs §7). Budget : < 20 % du temps réel, soit < 533 µs
-//! pour un bloc de 128 frames à 48 kHz — la cible est donc < ~107 µs.
+//! à 128 frames (specs §7) — chaîne M2 complète : varispeed Hermite, EQ
+//! 3 bandes, cue, limiteur, sortie 4 canaux. Budget : < 20 % du temps réel,
+//! soit < 533 µs pour un bloc de 128 frames à 48 kHz — cible < ~107 µs.
 
 use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use engine::dsp::{EqBand, eq_coeffs};
 use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, SAMPLE_RATE, TrackBuffer};
 
 const BLOCK_FRAMES: usize = 128;
@@ -23,17 +25,30 @@ fn sine_track(freq: f32, seconds: f32) -> Arc<TrackBuffer> {
 
 fn callback_2_decks(c: &mut Criterion) {
     let (mut graph, mut ports) = AudioGraph::new();
+    // Cas réaliste chargé : 4 canaux (master + casque), varispeed hors
+    // nominal, EQ non transparents, un deck en pré-écoute.
+    graph.set_output_channels(4);
     let a = sine_track(440.0, 30.0);
     let b = sine_track(220.0, 30.0);
+    let fs = f64::from(SAMPLE_RATE);
     let cmds = &mut ports.commands;
     cmds.push(EngineCommand::SwapTrackBuffer(Deck::A, a.clone()))
         .unwrap();
     cmds.push(EngineCommand::SwapTrackBuffer(Deck::B, b.clone()))
         .unwrap();
+    for deck in Deck::ALL {
+        cmds.push(EngineCommand::SetPitch(deck, 1.043)).unwrap();
+        for band in EqBand::ALL {
+            cmds.push(EngineCommand::SetEq(deck, band, eq_coeffs(band, -6.0, fs)))
+                .unwrap();
+        }
+    }
+    cmds.push(EngineCommand::SetCueEnabled(Deck::B, true))
+        .unwrap();
     cmds.push(EngineCommand::Play(Deck::A)).unwrap();
     cmds.push(EngineCommand::Play(Deck::B)).unwrap();
 
-    let mut out = vec![0.0f32; BLOCK_FRAMES * CHANNELS];
+    let mut out = vec![0.0f32; BLOCK_FRAMES * 4];
     // Premier bloc : draine les commandes d'installation.
     graph.process(&mut out);
 

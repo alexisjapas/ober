@@ -20,15 +20,17 @@
 //! paniquer tout le processus si le callback alloue (debug uniquement).
 
 pub mod command;
+pub mod dsp;
 pub mod graph;
 pub mod snapshot;
 pub mod stream;
 pub mod track;
 
 pub use command::EngineCommand;
+pub use dsp::EqBand;
 pub use graph::{AudioGraph, EnginePorts};
 pub use snapshot::{DeckSnapshot, EngineSnapshot};
-pub use stream::{Engine, EngineError, StreamInfo};
+pub use stream::{Engine, EngineConfig, EngineError, StreamInfo};
 pub use track::TrackBuffer;
 
 /// Format interne : f32, 48 kHz, stéréo entrelacé (specs §3.1).
@@ -37,6 +39,11 @@ pub const CHANNELS: usize = 2;
 /// Taille de buffer cible en frames (specs §3.1 : 128–256). Clampée à la
 /// plage supportée par le périphérique (le fallback 512 en découle).
 pub const TARGET_BUFFER_FRAMES: u32 = 256;
+/// Taille maximale d'un bloc de callback (dimensionne les buffers scratch
+/// pré-alloués du graphe — au-delà, le bloc est tronqué).
+pub const MAX_BLOCK_FRAMES: usize = 8_192;
+/// Excursion maximale du varispeed (±16 %, specs §1.2).
+pub const MAX_PITCH_RATIO: f64 = 0.16;
 
 /// Détection d'allocation dans le callback (specs §7). Actif uniquement en
 /// debug : en release l'allocateur traqué est transparent.

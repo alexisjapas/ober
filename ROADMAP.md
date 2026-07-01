@@ -55,12 +55,14 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 
 ## M2 — DSP
 
-- [ ] EQ 3 bandes biquad RBJ (low-shelf ~250 Hz, peak ~1 kHz, high-shelf ~2,5 kHz), gains −26 → +6 dB, kill optionnel ; **coefficients calculés hors callback**, les commandes portent les coefficients (§3.3)
-- [ ] Varispeed ±8 % / ±16 %, interpolation Hermite cubique 4 points (linéaire acceptable en premier jet, à remplacer avant v0.1) (§3.3)
-- [ ] Limiteur soft-clip master (`tanh` ou knee) — obligatoire (§3.3)
-- [ ] **Tôt dans le jalon** (risque §9) : ouverture de la carte DJControl en un seul stream 4 canaux (1/2 master, 3/4 casque) ; détection par nom "DJControl" + fichier de config ; fallback stéréo périphérique par défaut ; plan B : 2 périphériques séparés (§3.2)
-- [ ] Cue mix casque : `cue_gain * mix(decks cue) + master_gain_cue * master` (§3.3)
-- [ ] Tests : réponse des biquads vs référence, courbes de crossfader (§7)
+- [x] EQ 3 bandes biquad RBJ maison (low-shelf 250 Hz, peak 1 kHz, high-shelf 2,5 kHz), gains −26 → +6 dB ; **coefficients calculés hors callback** (`dsp::eq_coeffs`), les commandes portent les coefficients ; kill −∞ reporté au mapping M3 (§3.3)
+- [x] Varispeed ±16 % (clavier limité à ±8 %), interpolation Hermite cubique 4 points directement (pas de premier jet linéaire) (§3.3)
+- [x] Limiteur soft-clip master `tanh` (aussi appliqué au bus casque) (§3.3)
+- [x] Stream 4 canaux (1/2 master, 3/4 casque) sur périphérique matché par nom ("DJControl" auto ou `device_match` de `ober.config.ron`) ; fallback stéréo périphérique par défaut ; le 4 canaux n'est jamais tenté sur le périphérique par défaut (cartes 5.1) (§3.2)
+- [x] Cue mix casque : balance cue↔master + gain casque, tap cue post-gain deck / pré-crossfader (§3.3)
+- [x] Tests : réponse des biquads vs formule théorique (y compris filtrage temporel), Hermite, soft-clip, varispeed (fréquence transposée), kill EQ vs réponse théorique, limiteur borné, routage cue 4 canaux indépendant du crossfader (§7)
+- [x] Bench chaîne complète : ~6,6 µs / bloc de 128 frames en 4 canaux (~0,25 % du budget, cible < 20 %)
+- [ ] **Validation matérielle sur l'Inpulse** : carte détectée, stream 4 canaux ouvert (risque cpal/ALSA §9 — si échec : plan B 2 périphériques), pré-écoute au casque à l'oreille, mesure de latence physique — checklist TESTING.md
 
 **Sortie** : pré-écoute casque fonctionnelle sur l'Inpulse.
 

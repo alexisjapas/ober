@@ -17,6 +17,8 @@ analysis.workspace = true
 midi.workspace = true
 mapping.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+ron.workspace = true
 
 [lints]
 workspace = true

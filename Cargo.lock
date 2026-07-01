@@ -238,6 +238,8 @@ dependencies = [
  "engine",
  "mapping",
  "midi",
+ "ron",
+ "serde",
 ]
 
 [[package]]

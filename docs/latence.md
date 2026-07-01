@@ -18,11 +18,13 @@ latence totale ≈ buffer logiciel (cpal) + buffer(s) du périphérique + DAC
 
 ## Charge du callback (mesurée, bench criterion)
 
-`cargo bench -p engine --bench callback` — mix 2 decks actifs, bloc de
-128 frames, machine de dev (2026-07) :
+`cargo bench -p engine --bench callback` — 2 decks actifs, bloc de
+128 frames, machine de dev (Ryzen 7 7800X3D, 2026-07) :
 
-- **≈ 665 ns / bloc**, soit ~0,03 % du budget temps réel de 2,67 ms
-  (budget specs : < 20 %). Marge très large pour l'EQ/varispeed/limiteur du M2.
+- **M1** (mix simple, stéréo) : ≈ 665 ns / bloc, ~0,03 % du budget de 2,67 ms.
+- **M2** (chaîne complète : varispeed Hermite, EQ 3 bandes, cue, limiteur,
+  sortie 4 canaux) : **≈ 6,6 µs / bloc**, soit ~0,25 % du budget
+  (budget specs : < 20 %). Marge très large pour la suite.
 
 Le snapshot expose `callback_load` (lissé) et `underruns` en continu dans la
 barre d'état (titre de fenêtre au M1).

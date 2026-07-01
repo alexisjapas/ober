@@ -5,6 +5,8 @@
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DeckSnapshot {
     pub playing: bool,
+    /// Pré-écoute casque active (état pour l'UI et les LEDs, M5).
+    pub cue: bool,
     /// Position de lecture dans la piste, en samples (48 kHz).
     pub position_samples: u64,
     /// Longueur de la piste chargée, en samples (0 = pas de piste).

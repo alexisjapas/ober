@@ -1,0 +1,13 @@
+// Configuration optionnelle d'ober : copier vers `ober.config.ron` à côté
+// du binaire (ou du répertoire de lancement) et adapter.
+//
+// Sans fichier de config : détection automatique d'un périphérique dont le
+// nom contient "DJControl" (stream 4 canaux master+casque s'il le supporte),
+// sinon périphérique par défaut du système en stéréo.
+Config(
+    // Substring (insensible à la casse) du nom du périphérique de sortie.
+    device_match: Some("DJControl"),
+    // Taille de buffer en frames à 48 kHz (256 ≈ 5,3 ms). Clampée à la
+    // plage supportée par le périphérique.
+    buffer_frames: Some(256),
+)

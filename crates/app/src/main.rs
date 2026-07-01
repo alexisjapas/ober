@@ -1,12 +1,16 @@
 //! Binaire Bevy : UI, orchestration, plugins (specs §6). Seule crate du
 //! workspace autorisée à dépendre de Bevy (frontière §1.4, vérifiée en CI).
 //!
-//! M1 : mix 2 pistes au clavier — pas encore de rendu (waveforms/design
-//! system : M6). Usage :
+//! M1/M2 : mix 2 pistes au clavier, EQ/varispeed/limiteur, pré-écoute casque
+//! si la carte du contrôleur est détectée — pas encore de rendu (waveforms et
+//! design system : M6). Usage :
 //!
 //! ```sh
 //! cargo run -p app -- piste_a.mp3 piste_b.flac
 //! ```
+//!
+//! Configuration optionnelle dans `ober.config.ron` (répertoire courant) :
+//! périphérique audio (`device_match`) et taille de buffer.
 //!
 //! Contrôles (positions physiques, étiquettes QWERTY) :
 //!
@@ -19,19 +23,33 @@
 //! | `↑` `↓`                 | volume deck B + / −                 |
 //! | `C` `V`                 | crossfader vers A / vers B          |
 //! | `-` `=`                 | gain master − / +                   |
+//! | `1` / `2`               | cue casque deck A / deck B          |
+//! | `Q` `E`                 | pitch deck A − / + (±8 %)           |
+//! | `U` `O`                 | pitch deck B − / + (±8 %)           |
+//! | `R` / `P`               | remise à zéro du pitch A / B        |
+//! | `N` `M`                 | mix casque cue ↔ master             |
+//! | `J` `K`                 | gain casque − / +                   |
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
+use serde::Deserialize;
 
-use engine::{Deck, Engine, EngineCommand, EngineSnapshot, SAMPLE_RATE, TrackBuffer};
+use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, SAMPLE_RATE, TrackBuffer};
 
 const SEEK_STEP_SECONDS: u64 = 5;
 const VOLUME_PER_SECOND: f32 = 0.8;
 const CROSSFADER_PER_SECOND: f32 = 1.5;
 const MASTER_PER_SECOND: f32 = 0.8;
+/// Plage pitch clavier : ±8 % (le ±16 % complet arrive avec le fader MIDI).
+const PITCH_RANGE: f32 = 0.08;
+const PITCH_PER_SECOND: f32 = 0.04;
+const CUE_MIX_PER_SECOND: f32 = 0.8;
+const HEADPHONE_PER_SECOND: f32 = 0.8;
+
+const CONFIG_PATH: &str = "ober.config.ron";
 
 fn main() {
     App::new()
@@ -48,6 +66,34 @@ fn main() {
             (poll_decoded, keyboard_controls, drain_engine, update_status).chain(),
         )
         .run();
+}
+
+/// Configuration optionnelle (`ober.config.ron`, specs §3.2).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AppConfig {
+    /// Substring du nom du périphérique de sortie. Absent → détection
+    /// automatique "DJControl" puis périphérique par défaut.
+    device_match: Option<String>,
+    buffer_frames: Option<u32>,
+}
+
+impl AppConfig {
+    fn load() -> Self {
+        match std::fs::read_to_string(CONFIG_PATH) {
+            Ok(text) => match ron::from_str(&text) {
+                Ok(config) => {
+                    info!("configuration lue depuis {CONFIG_PATH}");
+                    config
+                }
+                Err(e) => {
+                    error!("{CONFIG_PATH} invalide ({e}) — configuration par défaut");
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
+        }
+    }
 }
 
 /// Le moteur n'est pas `Sync` (producteurs SPSC) : accès sérialisé par un
@@ -67,9 +113,9 @@ struct DecodeInbox(Mutex<Receiver<DecodedMsg>>);
 
 struct LoadedTrack {
     name: String,
-    /// Clone de l'Arc envoyé au moteur, jamais lu au M1 (le rendu waveform
-    /// M6 s'en servira) : garantit qu'un drop côté callback ne désalloue
-    /// jamais (cf. engine::track).
+    /// Clone de l'Arc envoyé au moteur, jamais lu au M1/M2 (le rendu
+    /// waveform M6 s'en servira) : garantit qu'un drop côté callback ne
+    /// désalloue jamais (cf. engine::track).
     _buffer: Arc<TrackBuffer>,
 }
 
@@ -83,21 +129,52 @@ struct Decks {
 #[derive(Resource)]
 struct MixState {
     volumes: [f32; 2],
+    /// Fraction de pitch (−0,08 → +0,08) ; le moteur reçoit 1.0 + pitch.
+    pitch: [f32; 2],
+    cue: [bool; 2],
     crossfader: f32,
     master: f32,
+    /// 0.0 = cue seul, 1.0 = master seul.
+    cue_mix: f32,
+    headphone: f32,
+}
+
+impl Default for MixState {
+    fn default() -> Self {
+        Self {
+            volumes: [1.0, 1.0],
+            pitch: [0.0, 0.0],
+            cue: [false, false],
+            crossfader: 0.0,
+            master: 1.0,
+            cue_mix: 0.5,
+            headphone: 1.0,
+        }
+    }
 }
 
 #[derive(Resource, Default)]
 struct LastSnapshot(EngineSnapshot);
 
 fn setup(mut commands: Commands) {
-    let engine = Engine::start().unwrap_or_else(|e| {
+    let config = AppConfig::load();
+    let engine_config = EngineConfig {
+        device_match: config.device_match,
+        buffer_frames: config.buffer_frames.unwrap_or(engine::TARGET_BUFFER_FRAMES),
+    };
+    let engine = Engine::start(engine_config).unwrap_or_else(|e| {
         panic!("impossible de démarrer le moteur audio : {e}");
     });
     info!(
-        "audio : « {} » @ {} Hz, buffer {} (latence buffer ≈ {})",
+        "audio : « {} » @ {} Hz, {} canaux ({}), buffer {} (latence buffer ≈ {})",
         engine.info.device_name,
         engine.info.sample_rate,
+        engine.info.channels,
+        if engine.info.headphone_active() {
+            "master + casque"
+        } else {
+            "master seul, pas de pré-écoute"
+        },
         engine
             .info
             .buffer_frames
@@ -136,15 +213,12 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
     commands.insert_resource(DecodeInbox(Mutex::new(rx)));
     commands.insert_resource(Decks::default());
-    commands.insert_resource(MixState {
-        volumes: [1.0, 1.0],
-        crossfader: 0.0,
-        master: 1.0,
-    });
+    commands.insert_resource(MixState::default());
     commands.insert_resource(LastSnapshot::default());
 
     info!(
-        "contrôles : Espace/Entrée play·pause A/B — A/D et ←/→ seek — W/S et ↑/↓ volumes — C/V crossfader — -/= master"
+        "contrôles : Espace/Entrée play·pause — A/D ←/→ seek — W/S ↑/↓ volumes — C/V crossfader \
+         — -/= master — 1/2 cue — Q/E U/O pitch (R/P reset) — N/M mix casque — J/K gain casque"
     );
 }
 
@@ -215,6 +289,18 @@ fn keyboard_controls(
         }
     }
 
+    // Cue casque (toggle).
+    for (deck, key) in [(Deck::A, KeyCode::Digit1), (Deck::B, KeyCode::Digit2)] {
+        if keys.just_pressed(key) {
+            let cue = &mut mix.cue[deck.index()];
+            *cue = !*cue;
+            let _ = eng
+                .ports
+                .commands
+                .push(EngineCommand::SetCueEnabled(deck, *cue));
+        }
+    }
+
     // Seek ±5 s depuis la position publiée.
     let seek_step = SEEK_STEP_SECONDS * u64::from(SAMPLE_RATE);
     for (deck, back, forward) in [
@@ -257,6 +343,27 @@ fn keyboard_controls(
         }
     }
 
+    // Pitch : maintien pour glisser, R/P pour revenir à zéro.
+    for (deck, plus, minus, reset_key) in [
+        (Deck::A, KeyCode::KeyE, KeyCode::KeyQ, KeyCode::KeyR),
+        (Deck::B, KeyCode::KeyO, KeyCode::KeyU, KeyCode::KeyP),
+    ] {
+        let delta = axis(plus, minus) * PITCH_PER_SECOND * dt;
+        let reset = keys.just_pressed(reset_key);
+        if delta != 0.0 || reset {
+            let pitch = &mut mix.pitch[deck.index()];
+            *pitch = if reset {
+                0.0
+            } else {
+                (*pitch + delta).clamp(-PITCH_RANGE, PITCH_RANGE)
+            };
+            let _ = eng
+                .ports
+                .commands
+                .push(EngineCommand::SetPitch(deck, f64::from(1.0 + *pitch)));
+        }
+    }
+
     let xf_delta = axis(KeyCode::KeyV, KeyCode::KeyC) * CROSSFADER_PER_SECOND * dt;
     if xf_delta != 0.0 {
         mix.crossfader = (mix.crossfader + xf_delta).clamp(-1.0, 1.0);
@@ -274,11 +381,29 @@ fn keyboard_controls(
             .commands
             .push(EngineCommand::SetMasterGain(mix.master));
     }
+
+    let cue_mix_delta = axis(KeyCode::KeyM, KeyCode::KeyN) * CUE_MIX_PER_SECOND * dt;
+    if cue_mix_delta != 0.0 {
+        mix.cue_mix = (mix.cue_mix + cue_mix_delta).clamp(0.0, 1.0);
+        let _ = eng
+            .ports
+            .commands
+            .push(EngineCommand::SetCueMix(mix.cue_mix));
+    }
+
+    let hp_delta = axis(KeyCode::KeyK, KeyCode::KeyJ) * HEADPHONE_PER_SECOND * dt;
+    if hp_delta != 0.0 {
+        mix.headphone = (mix.headphone + hp_delta).clamp(0.0, 2.0);
+        let _ = eng
+            .ports
+            .commands
+            .push(EngineCommand::SetHeadphoneGain(mix.headphone));
+    }
 }
 
 /// Draine chaque frame les canaux audio → UI : snapshot d'état, récupération
 /// mémoire (les `Arc` se désallouent ici, côté non temps réel) et tap audio
-/// (ignoré au M1 — le bus d'analyseurs arrive au M5).
+/// (ignoré pour l'instant — le bus d'analyseurs arrive au M5).
 fn drain_engine(engine: Res<AudioEngine>, mut snapshot: ResMut<LastSnapshot>) {
     let mut eng = engine.0.lock().unwrap();
     snapshot.0 = *eng.ports.snapshots.read();
@@ -286,8 +411,8 @@ fn drain_engine(engine: Res<AudioEngine>, mut snapshot: ResMut<LastSnapshot>) {
     while eng.ports.tap.pop().is_ok() {}
 }
 
-/// Barre d'état minimale du M1 : tout dans le titre de fenêtre, rafraîchi à
-/// ~4 Hz. La vraie barre d'état (specs §6.3) arrive au M6.
+/// Barre d'état minimale : tout dans le titre de fenêtre, rafraîchi à ~4 Hz.
+/// La vraie barre d'état (specs §6.3) arrive au M6.
 fn update_status(
     time: Res<Time>,
     snapshot: Res<LastSnapshot>,
@@ -306,20 +431,24 @@ fn update_status(
         let snap = &snapshot.0.decks[i];
         let name = decks.tracks[i].as_ref().map_or("—", |t| t.name.as_str());
         let state = if snap.playing { "▶" } else { "⏸" };
+        let cue = if snap.cue { " CUE" } else { "" };
         format!(
-            "{state} {} {}/{}",
+            "{state} {} {}/{} {:+.1}%{cue}",
             name,
             format_time(snap.position_samples),
-            format_time(snap.track_frames)
+            format_time(snap.track_frames),
+            mix.pitch[i] * 100.0,
         )
     };
 
     let title = format!(
-        "ober — A {} | B {} | xf {:+.2} | master {:.2} | underruns {} | charge audio {:.0} %",
+        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | underruns {} | charge audio {:.0} %",
         deck_status(0),
         deck_status(1),
         mix.crossfader,
         mix.master,
+        mix.headphone,
+        mix.cue_mix,
         snapshot.0.underruns,
         snapshot.0.callback_load * 100.0
     );

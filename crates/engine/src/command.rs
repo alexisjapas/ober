@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use crate::Deck;
+use crate::dsp::{BiquadCoeffs, EqBand};
 use crate::track::TrackBuffer;
 
-/// S'étoffe à chaque jalon : coefficients d'EQ et routage cue (M2),
-/// jog bend/scratch (M4).
+/// S'étoffe à chaque jalon : jog bend/scratch au M4.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EngineCommand {
@@ -25,6 +25,19 @@ pub enum EngineCommand {
     SetCrossfader(f32),
     /// Gain master linéaire, clampé à `[0, 2]`.
     SetMasterGain(f32),
+    /// Vitesse de lecture (1.0 = nominale), clampée à ±16 % (specs §1.2).
+    /// Comportement vinyle : le pitch modifie la hauteur (specs §3.3).
+    SetPitch(Deck, f64),
+    /// Coefficients d'une bande d'EQ, calculés hors callback via
+    /// `dsp::eq_coeffs` (specs §3.3 : les commandes portent les
+    /// coefficients, jamais les fréquences).
+    SetEq(Deck, EqBand, BiquadCoeffs),
+    /// Active/désactive la pré-écoute casque du deck (specs §3.3).
+    SetCueEnabled(Deck, bool),
+    /// Balance cue/master du casque : 0.0 = cue seul, 1.0 = master seul.
+    SetCueMix(f32),
+    /// Gain casque linéaire, clampé à `[0, 2]`.
+    SetHeadphoneGain(f32),
     /// Remplace la piste du deck par échange de pointeur, sans copie
     /// (specs §3.4). L'ancien buffer repart par le canal de récupération.
     /// Le deck est remis à zéro (position 0, lecture arrêtée).
