@@ -1,0 +1,22 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Moteur audio temps réel : decks, mixage, DSP, sortie cpal. Aucune dépendance Bevy."
+
+[features]
+# Panique si le callback audio alloue (debug uniquement, specs §7).
+rt-checks = ["dep:assert_no_alloc"]
+
+[dependencies]
+cpal.workspace = true
+rtrb.workspace = true
+triple_buffer.workspace = true
+assert_no_alloc = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[lints]
+workspace = true

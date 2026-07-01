@@ -1,0 +1,75 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/engine",
+    "crates/decode",
+    "crates/analysis",
+    "crates/midi",
+    "crates/mapping",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+# À confirmer avant première publication (specs — licence, compat mappings Mixxx).
+license = "GPL-3.0-or-later"
+
+# Registre unique des versions du workspace. Chaque crate référence ces entrées
+# avec `dep.workspace = true` au jalon qui en a besoin.
+[workspace.dependencies]
+# --- crates internes ---
+engine = { path = "crates/engine" }
+decode = { path = "crates/decode" }
+analysis = { path = "crates/analysis" }
+midi = { path = "crates/midi" }
+mapping = { path = "crates/mapping" }
+
+# --- audio ---
+cpal = "0.18.1"
+symphonia = { version = "0.6.0", features = ["all"] }
+rubato = "3.0.0"
+rustfft = "6.4.1"
+biquad = "0.6.0"                                      # M2 (ou implémentation RBJ maison)
+
+# --- temps réel / inter-threads (specs §2.3) ---
+rtrb = "0.3.4"
+triple_buffer = "9.0.0"
+crossbeam-channel = "0.5.15"
+assert_no_alloc = "1.1.2"
+
+# --- MIDI ---
+midir = "0.11.0"
+
+# --- sérialisation / mapping ---
+serde = { version = "1.0.228", features = ["derive"] }
+ron = "0.12.2"
+
+# --- UI : réservé à la crate `app`, frontière vérifiée en CI (specs §1.4) ---
+# ÉPINGLAGE EXACT de Bevy : les migrations de version sont des tâches
+# planifiées (~1×/an), jamais subies.
+bevy = "=0.19.0"
+bevy_egui = "0.41.0"                                  # M6 — valider la compat avec bevy 0.19 avant usage
+rfd = "0.17.2"                                        # M6 — file picker natif
+
+# --- divers ---
+thiserror = "2.0.18"
+anyhow = "1.0.103"
+
+# --- dev / bench ---
+criterion = "0.8.2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+# Dépendances (dont tout le DSP) optimisées même en dev : indispensable pour
+# tenir le budget temps réel audio en debug. Taille du binaire et temps de
+# compilation explicitement non prioritaires (specs — priorités produit).
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"

@@ -1,0 +1,30 @@
+// Mapping Hercules DJControl Inpulse 200 MK2 — SQUELETTE (M0).
+//
+// À compléter au jalon M3 (puis M4 jogs, M5 feedback) à partir de :
+//   1. le mapping Mixxx (dépôt mixxxdj/mixxx, res/controllers/) — référence
+//      principale pour notes/CC des pads, jogs, faders, LEDs et l'éventuel
+//      message d'init "full MIDI" des LEDs. Attention à la licence (GPL) si
+//      du contenu est traduit ;
+//   2. la rétro-ingénierie directe sur le matériel :
+//      `cargo run -p midi --bin midi-probe` (ou aseqdump, fourni par le flake).
+//
+// Exemples cibles une fois le schéma M3 complet (cf. docs/SPECS.md §5.2) :
+//   (input: NoteOn(ch: 1, note: 0x07), action: Play(deck: A), mode: Toggle),
+//   (input: CC(ch: 0, cc: 0x00), action: CrossFader, mode: Absolute),
+//   (input: CC(ch: 1, cc: 0x02), action: EqMid(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
+//   (input: CC(ch: 1, cc: 0x0A), action: JogTick(deck: A), mode: Relative(encoding: SignedBit)),
+//   (input: NoteOn(ch: 1, note: 0x08), action: JogTouch(deck: A), mode: Gate),
+//   (input: NoteOn(ch: 1, note: 0x03), action: Shift, mode: Gate),
+//   (input: NoteOn(ch: 1, note: 0x07), shift: true, action: Cue(deck: A), mode: Momentary),
+
+Mapping(
+    name: "Hercules DJControl Inpulse 200 MK2",
+    device_match: ["DJControl Inpulse 200 MK2", "DJControl"],
+    controls: [],
+    jog: (
+        ticks_per_rev: 720,     // à valider avec midi-probe sur le matériel
+        touch_scratch: true,
+        bend_sensitivity: 0.3,
+        release_ramp_ms: 100,
+    ),
+)

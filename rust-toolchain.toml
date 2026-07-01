@@ -1,0 +1,6 @@
+# Rust stable (specs — langage). La reproductibilité côté Nix est assurée par
+# flake.lock (rust-overlay) ; côté rustup, "stable" suit la dernière version.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]
+profile = "default"

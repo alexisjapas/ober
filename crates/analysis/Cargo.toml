@@ -1,0 +1,12 @@
+[package]
+name = "analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Analyse offline (BPM, beatgrid, waveform summary) et bus d'analyseurs temps réel."
+
+[dependencies]
+rustfft.workspace = true
+
+[lints]
+workspace = true

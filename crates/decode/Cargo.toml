@@ -1,0 +1,14 @@
+[package]
+name = "decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Décodage offline (symphonia) et resampling (rubato) vers f32 48 kHz stéréo entrelacé."
+
+[dependencies]
+symphonia.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

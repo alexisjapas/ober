@@ -1,0 +1,22 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Binaire Bevy : UI, orchestration, plugins. Seule crate autorisée à dépendre de Bevy."
+
+[[bin]]
+name = "dj-mix"
+path = "src/main.rs"
+
+[dependencies]
+bevy.workspace = true
+engine.workspace = true
+decode.workspace = true
+analysis.workspace = true
+midi.workspace = true
+mapping.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
