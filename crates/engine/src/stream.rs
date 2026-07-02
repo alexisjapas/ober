@@ -1,22 +1,31 @@
 //! Ouverture du périphérique de sortie et vie du stream cpal (specs §3.2).
 //!
 //! Sélection du périphérique : substring de config (`device_match`), sinon
-//! détection automatique "DJControl", sinon périphérique par défaut. Sur un
-//! périphérique matché par nom qui expose 4 canaux à 48 kHz, le stream est
-//! ouvert en 4 canaux (1/2 master, 3/4 casque) ; sinon stéréo master seul —
-//! l'application reste utilisable sans le contrôleur.
+//! détection automatique "DJControl", sinon périphérique par défaut.
+//!
+//! Construction du stream par **tentatives successives** — l'application
+//! doit rester utilisable quoi qu'il arrive (specs §3.2) :
+//! 1. périphérique matché par nom, 4 canaux (master 1/2 + casque 3/4),
+//!    buffer demandé clampé à la plage de **cette configuration** ;
+//! 2. idem en taille de buffer par défaut ;
+//! 3. idem en stéréo (master seul) ;
+//! 4. périphérique système par défaut, stéréo.
+//!
+//! Le graphe audio est pris en possession par le premier callback du stream
+//! retenu (verrou unique, jamais contendu ensuite) : les constructions
+//! ratées peuvent se succéder sans le consommer, leur callback n'étant
+//! jamais invoqué.
 //!
 //! Le stream cpal n'est pas `Send` : il vit sur un thread dédié qui le
-//! maintient en vie jusqu'au drop de [`Engine`]. Le callback audio, lui, est
-//! invoqué par le thread temps réel du backend (ALSA/CoreAudio/WASAPI).
+//! maintient en vie jusqu'au drop de [`Engine`].
 
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, StreamConfig, SupportedBufferSize};
+use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedBufferSize};
 
 use crate::graph::{AudioGraph, EnginePorts};
 use crate::{SAMPLE_RATE, TARGET_BUFFER_FRAMES};
@@ -31,8 +40,8 @@ pub struct EngineConfig {
     /// périphérique par défaut. Un match explicite introuvable est une
     /// erreur ; la détection automatique échoue en silence.
     pub device_match: Option<String>,
-    /// Taille de buffer demandée en frames, clampée à la plage du
-    /// périphérique (specs §3.1).
+    /// Taille de buffer demandée en frames, clampée à la plage de la
+    /// configuration retenue (specs §3.1).
     pub buffer_frames: u32,
 }
 
@@ -75,10 +84,8 @@ pub enum EngineError {
     NoDevice,
     #[error("aucun périphérique de sortie ne correspond à « {0} »")]
     DeviceNotFound(String),
-    #[error("configuration du périphérique : {0}")]
-    Config(String),
-    #[error("construction du stream ({0} Hz, {1} canaux) : {2}")]
-    BuildStream(u32, u16, String),
+    #[error("construction du stream — dernière tentative : {0}")]
+    BuildStream(String),
     #[error("démarrage du stream : {0}")]
     PlayStream(String),
     #[error("thread audio : {0}")]
@@ -152,26 +159,25 @@ fn audio_thread(
     }
     let _ = ready.send(Ok(info));
 
-    // Maintient le stream en vie jusqu'au drop de l'Engine (ou à la
-    // déconnexion du canal, si l'Engine a été oublié sans drop propre).
+    // Maintient le stream en vie jusqu'au drop de l'Engine.
     let _ = shutdown.recv();
     drop(stream);
 }
 
-/// Choisit le périphérique de sortie. Retourne aussi son nom et vrai si le
-/// choix vient d'un match par nom (condition pour tenter le 4 canaux : on
-/// n'envoie pas le casque sur les canaux surround d'une carte 5.1).
+fn device_name(device: &Device) -> String {
+    device
+        .description()
+        .map(|d| d.name().to_owned())
+        .unwrap_or_else(|_| "périphérique inconnu".to_owned())
+}
+
+/// Choisit le périphérique de sortie. Retourne aussi vrai si le choix vient
+/// d'un match par nom (condition pour tenter le 4 canaux : on n'envoie pas
+/// le casque sur les canaux surround d'une carte 5.1).
 fn pick_device(
     host: &cpal::Host,
     config: &EngineConfig,
 ) -> Result<(Device, String, bool), EngineError> {
-    let device_name = |device: &Device| -> String {
-        device
-            .description()
-            .map(|d| d.name().to_owned())
-            .unwrap_or_else(|_| "périphérique inconnu".to_owned())
-    };
-
     let wanted = config.device_match.as_deref();
     if let Ok(devices) = host.output_devices() {
         for device in devices {
@@ -194,88 +200,160 @@ fn pick_device(
     Ok((device, name, false))
 }
 
-/// Vrai si le périphérique annonce une configuration f32 4 canaux à 48 kHz.
-fn supports_4ch_48k(device: &Device) -> bool {
-    let Ok(configs) = device.supported_output_configs() else {
-        return false;
-    };
-    configs.into_iter().any(|c| {
-        c.channels() == 4
-            && c.min_sample_rate() <= SAMPLE_RATE
-            && c.max_sample_rate() >= SAMPLE_RATE
-            && c.sample_format() == cpal::SampleFormat::F32
-    })
+/// Support d'une configuration f32 @ 48 kHz à `channels` canaux :
+/// `Some(plage de buffer)` si supportée (`None` intérieur = plage inconnue).
+#[allow(clippy::option_option)]
+fn config_support(device: &Device, channels: u16) -> Option<Option<(u32, u32)>> {
+    let configs = device.supported_output_configs().ok()?;
+    for config in configs {
+        if config.channels() == channels
+            && config.min_sample_rate() <= SAMPLE_RATE
+            && config.max_sample_rate() >= SAMPLE_RATE
+            && config.sample_format() == SampleFormat::F32
+        {
+            return Some(match config.buffer_size() {
+                SupportedBufferSize::Range { min, max } => Some((*min, *max)),
+                SupportedBufferSize::Unknown => None,
+            });
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Attempt {
+    channels: u16,
+    buffer: BufferSize,
+}
+
+/// Tentatives pour un périphérique : par nombre de canaux candidat, buffer
+/// demandé clampé à la plage de LA configuration visée (le bug historique :
+/// la plage du profil par défaut n'est pas celle du 4 canaux @ 48 kHz),
+/// puis taille par défaut du périphérique.
+fn device_attempts(device: &Device, channel_candidates: &[u16], requested: u32) -> Vec<Attempt> {
+    let mut attempts = Vec::new();
+    for &channels in channel_candidates {
+        let Some(range) = config_support(device, channels) else {
+            continue;
+        };
+        if let Some((min, max)) = range {
+            attempts.push(Attempt {
+                channels,
+                buffer: BufferSize::Fixed(requested.clamp(min, max)),
+            });
+        }
+        attempts.push(Attempt {
+            channels,
+            buffer: BufferSize::Default,
+        });
+    }
+    attempts
 }
 
 fn build_stream(
-    mut graph: AudioGraph,
+    graph: AudioGraph,
     config: &EngineConfig,
 ) -> Result<(cpal::Stream, StreamInfo), EngineError> {
     let host = cpal::default_host();
-    let (device, device_name, matched_by_name) = pick_device(&host, config)?;
+    let (device, name, matched_by_name) = pick_device(&host, config)?;
 
-    // 4 canaux (master + casque) uniquement sur un périphérique choisi par
-    // nom ; le périphérique par défaut reste en stéréo (specs §3.2).
-    let channels: u16 = if matched_by_name && supports_4ch_48k(&device) {
-        4
-    } else {
-        2
-    };
-    graph.set_output_channels(usize::from(channels));
-
-    let default_config = device
-        .default_output_config()
-        .map_err(|e| EngineError::Config(e.to_string()))?;
-
-    // Taille demandée si la plage du périphérique le permet, sinon clamp
-    // dans la plage (c'est le fallback 512+ des specs §3.1), sinon défaut.
-    let buffer_size = match default_config.buffer_size() {
-        SupportedBufferSize::Range { min, max } => Some(config.buffer_frames.clamp(*min, *max)),
-        SupportedBufferSize::Unknown => None,
-    };
-    let stream_config = StreamConfig {
-        channels,
-        sample_rate: SAMPLE_RATE,
-        buffer_size: buffer_size.map_or(BufferSize::Default, BufferSize::Fixed),
-    };
+    // Plan de tentatives (specs §3.2) : 4 canaux réservé au périphérique
+    // matché par nom ; repli final sur le périphérique système par défaut.
+    let channel_candidates: &[u16] = if matched_by_name { &[4, 2] } else { &[2] };
+    let mut plans: Vec<(Device, String, Attempt)> = Vec::new();
+    for attempt in device_attempts(&device, channel_candidates, config.buffer_frames) {
+        plans.push((device.clone(), name.clone(), attempt));
+    }
+    if matched_by_name && let Some(fallback) = host.default_output_device() {
+        let fallback_name = device_name(&fallback);
+        if fallback_name != name {
+            for attempt in device_attempts(&fallback, &[2], config.buffer_frames) {
+                plans.push((fallback.clone(), fallback_name.clone(), attempt));
+            }
+        }
+    }
+    if plans.is_empty() {
+        // Périphérique muet sur ses configurations annoncées : dernier essai
+        // aveugle en stéréo par défaut.
+        plans.push((
+            device.clone(),
+            name.clone(),
+            Attempt {
+                channels: 2,
+                buffer: BufferSize::Default,
+            },
+        ));
+    }
 
     let stream_errors = graph.stream_error_counter();
-    let mut graph = graph;
-    let frame_channels = f64::from(channels);
+    // Le graphe sera pris par le premier callback du stream retenu.
+    let shared = Arc::new(Mutex::new(Some(graph)));
 
-    let stream = device
-        .build_output_stream(
-            stream_config,
-            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                let start = Instant::now();
-                #[cfg(feature = "rt-checks")]
-                assert_no_alloc::assert_no_alloc(|| graph.process(data));
-                #[cfg(not(feature = "rt-checks"))]
-                graph.process(data);
-                let budget = Duration::from_secs_f64(
-                    data.len() as f64 / (frame_channels * f64::from(SAMPLE_RATE)),
-                );
-                graph.record_callback(start.elapsed(), budget);
-                graph.publish_snapshot();
-            },
-            move |err: cpal::Error| {
-                // Autre thread que le callback data : incrément atomique
-                // seulement, le compteur est publié via le snapshot.
-                let _ = err;
-                stream_errors.fetch_add(1, Ordering::Relaxed);
-            },
-            None,
-        )
-        .map_err(|e| EngineError::BuildStream(SAMPLE_RATE, channels, e.to_string()))?;
+    let mut last_error = String::from("aucune configuration candidate");
+    for (device, name, attempt) in plans {
+        let stream_config = StreamConfig {
+            channels: attempt.channels,
+            sample_rate: SAMPLE_RATE,
+            buffer_size: attempt.buffer,
+        };
 
-    // Taille réelle si le backend la connaît, sinon celle demandée.
-    let buffer_frames = stream.buffer_size().ok().or(buffer_size);
+        let shared_slot = Arc::clone(&shared);
+        let channels = attempt.channels;
+        let mut local: Option<AudioGraph> = None;
+        let data_callback = move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+            let graph = match &mut local {
+                Some(graph) => graph,
+                slot => {
+                    // Première invocation du stream retenu : prise de
+                    // possession du graphe. Verrou unique, jamais contendu
+                    // ensuite (les callbacks des tentatives ratées ne sont
+                    // jamais invoqués).
+                    let taken = shared_slot.lock().ok().and_then(|mut s| s.take());
+                    let Some(mut graph) = taken else {
+                        data.fill(0.0);
+                        return;
+                    };
+                    graph.set_output_channels(usize::from(channels));
+                    slot.insert(graph)
+                }
+            };
+            let start = Instant::now();
+            #[cfg(feature = "rt-checks")]
+            assert_no_alloc::assert_no_alloc(|| graph.process(data));
+            #[cfg(not(feature = "rt-checks"))]
+            graph.process(data);
+            let budget = Duration::from_secs_f64(
+                data.len() as f64 / (f64::from(channels) * f64::from(SAMPLE_RATE)),
+            );
+            graph.record_callback(start.elapsed(), budget);
+            graph.publish_snapshot();
+        };
 
-    let info = StreamInfo {
-        device_name,
-        sample_rate: SAMPLE_RATE,
-        channels,
-        buffer_frames,
-    };
-    Ok((stream, info))
+        let errors = Arc::clone(&stream_errors);
+        let error_callback = move |_err: cpal::Error| {
+            // Autre thread que le callback data : incrément atomique
+            // seulement, publié via le snapshot.
+            errors.fetch_add(1, Ordering::Relaxed);
+        };
+
+        match device.build_output_stream(stream_config, data_callback, error_callback, None) {
+            Ok(stream) => {
+                let requested = match attempt.buffer {
+                    BufferSize::Fixed(frames) => Some(frames),
+                    BufferSize::Default => None,
+                };
+                let info = StreamInfo {
+                    device_name: name,
+                    sample_rate: SAMPLE_RATE,
+                    channels,
+                    buffer_frames: stream.buffer_size().ok().or(requested),
+                };
+                return Ok((stream, info));
+            }
+            Err(e) => {
+                last_error = format!("{name} ({channels} canaux, {:?}) : {e}", attempt.buffer);
+            }
+        }
+    }
+    Err(EngineError::BuildStream(last_error))
 }

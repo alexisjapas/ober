@@ -10,11 +10,20 @@ latence totale ≈ buffer logiciel (cpal) + buffer(s) du périphérique + DAC
 ```
 
 - **Buffer logiciel** : `TARGET_BUFFER_FRAMES = 256` frames à 48 kHz
-  = **5,33 ms** (clampé à la plage annoncée par le périphérique ; la taille
-  effective est loggée au démarrage et visible dans `StreamInfo`).
+  = **5,33 ms** (clampé à la plage annoncée par la configuration retenue ;
+  la taille effective est loggée au démarrage et visible dans `StreamInfo`).
 - **Périphérique** : dépend du backend. Sous PipeWire (couche ALSA), le
-  quantum ajoute typiquement 1 période ; sur l'ALSA brut de la carte
-  DJControl, viser 2 périodes de 128–256 frames.
+  quantum ajoute typiquement 1 période.
+
+**Mesuré sur le DJControl Inpulse 200 Mk2 (ALSA brut, 2026-07)** : la carte
+n'accepte que des buffers de **1114–1115 frames** en 4 canaux @ 48 kHz, soit
+≈ 23,2 ms de buffer logiciel — au-dessus de la cible de 10 ms des specs.
+Pistes pour descendre :
+- vérifier si PipeWire expose la carte en 4 canaux avec un quantum plus
+  court (alors pointer `device_match` vers ce nœud) ;
+- tester d'autres fréquences (44,1 kHz) au cas où la plage diffère ;
+- sinon, contrainte matérielle à documenter comme telle (l'objectif ≤ 10 ms
+  des specs visait « buffer + périphérique » sur du matériel qui le permet).
 
 ## Charge du callback (mesurée, bench criterion)
 

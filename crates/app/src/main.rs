@@ -272,9 +272,16 @@ fn setup(mut commands: Commands) {
         device_match: config.device_match,
         buffer_frames: config.buffer_frames.unwrap_or(engine::TARGET_BUFFER_FRAMES),
     };
-    let mut engine = Engine::start(engine_config).unwrap_or_else(|e| {
-        panic!("impossible de démarrer le moteur audio : {e}");
-    });
+    // Pas de panic dans un système Bevy (démontage sale) : erreur claire
+    // puis sortie propre.
+    let mut engine = match Engine::start(engine_config) {
+        Ok(engine) => engine,
+        Err(e) => {
+            error!("impossible de démarrer le moteur audio : {e}");
+            error!("ajustez `device_match`/`buffer_frames` dans {CONFIG_PATH} si besoin");
+            std::process::exit(1);
+        }
+    };
     info!(
         "audio : « {} » @ {} Hz, {} canaux ({}), buffer {} (latence buffer ≈ {})",
         engine.info.device_name,

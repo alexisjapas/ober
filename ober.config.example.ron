@@ -8,6 +8,7 @@ Config(
     // Substring (insensible à la casse) du nom du périphérique de sortie.
     device_match: Some("DJControl"),
     // Taille de buffer en frames à 48 kHz (256 ≈ 5,3 ms). Clampée à la
-    // plage supportée par le périphérique.
+    // plage supportée par la configuration retenue — le DJControl Inpulse
+    // 200 Mk2 impose par ex. 1114 frames (≈ 23 ms) en 4 canaux ALSA brut.
     buffer_frames: Some(256),
 )
