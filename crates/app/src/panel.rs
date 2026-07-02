@@ -7,7 +7,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::theme;
 use crate::waveform::WaveZoom;
-use crate::{AudioEngine, LastSnapshot, MidiRes};
+use crate::{AudioEngine, LastSnapshot, LoadSender, MidiRes, picker};
 
 pub struct PanelPlugin;
 
@@ -45,6 +45,7 @@ fn draw_panel(
     snapshot: Res<LastSnapshot>,
     midi: Res<MidiRes>,
     mut zoom: ResMut<WaveZoom>,
+    load_tx: Res<LoadSender>,
 ) -> Result {
     if !visible.0 {
         return Ok(());
@@ -70,6 +71,15 @@ fn draw_panel(
         if seconds != zoom.seconds {
             zoom.seconds = seconds;
         }
+        ui.horizontal(|ui| {
+            ui.label("Dialogue système (rfd) :");
+            if ui.button("→ deck A").clicked() {
+                picker::open(engine::Deck::A, load_tx.0.clone());
+            }
+            if ui.button("→ deck B").clicked() {
+                picker::open(engine::Deck::B, load_tx.0.clone());
+            }
+        });
 
         ui.separator();
         ui.heading("Diagnostics");

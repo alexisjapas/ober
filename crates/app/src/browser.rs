@@ -1,34 +1,52 @@
-//! Explorateur de fichiers intégré (couche utilitaire egui, specs §6.1) :
-//! navigation dossiers + fichiers audio, chargement direct vers un deck
-//! (mêmes workers que la CLI). Bascule avec `B` ; les boutons LOAD, les
-//! touches `F`/`L` et l'action MIDI `Load` l'ouvrent aussi. Le dialogue
-//! système natif (`rfd`) reste accessible depuis la barre d'outils.
+//! Bibliothèque intégrée en **Bevy natif** (quads + Text2d du design
+//! system) : panneau latéral droit listant dossiers et fichiers audio,
+//! pilotable aux trois entrées — mêmes intentions partout (specs §6.4) :
+//!
+//! - **contrôleur** : encodeur BROWSER (`LibraryScroll`), poussoir
+//!   (`LibraryEnter` : entre dans le dossier), boutons Load (charge la
+//!   sélection sur le deck ; bibliothèque fermée : l'ouvre) ;
+//! - **clavier** (modal quand ouverte, le contrôleur reste actif) :
+//!   `↑`/`↓` sélection, `→`/`Entrée` entrer, `←` dossier parent,
+//!   `F`/`L` charger la sélection sur A/B, `B`/`Échap` fermer ;
+//! - **souris** : clic = sélectionner, re-clic = entrer (dossier),
+//!   molette = défiler, boutons « → A »/« → B » = charger.
+//!
+//! Une ligne « .. » synthétique en tête permet la remontée au parent avec
+//! le seul encodeur. Le dialogue système `rfd` reste accessible depuis le
+//! panneau F12.
 
 use std::path::PathBuf;
 
+use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy::sprite::Anchor;
 
 use engine::Deck;
 
-use crate::{LoadSender, picker, spawn_load_worker, theme};
+use crate::fonts::UiFonts;
+use crate::theme::{color, font, layout};
+use crate::{LoadSender, spawn_load_worker};
 
 const AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "flac", "wav", "ogg", "m4a", "aac"];
+/// Pool de lignes pré-créées (les surnuméraires sont masquées).
+const MAX_ROWS: usize = 28;
+const ROW_HEIGHT: f32 = 24.0;
 
 pub struct BrowserPlugin;
 
 impl Plugin for BrowserPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Browser::default())
-            .add_systems(Update, toggle)
-            .add_systems(EguiPrimaryContextPass, draw);
+            .init_resource::<BrowserView>()
+            .add_systems(Startup, spawn_browser)
+            .add_systems(Update, (keys_input, mouse_input, render, place).chain());
     }
 }
 
-struct Entry {
-    name: String,
-    path: PathBuf,
-    is_dir: bool,
+pub struct Entry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
 }
 
 #[derive(Resource)]
@@ -36,6 +54,8 @@ pub struct Browser {
     pub open: bool,
     dir: PathBuf,
     entries: Vec<Entry>,
+    selected: usize,
+    scroll: usize,
     dirty: bool,
 }
 
@@ -45,36 +65,83 @@ impl Default for Browser {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         // La bibliothèque de l'utilisateur si elle existe, sinon le home.
-        let music = home.join("Musique");
-        let music_en = home.join("Music");
-        let dir = if music.is_dir() {
-            music
-        } else if music_en.is_dir() {
-            music_en
-        } else {
-            home
-        };
+        let dir = [home.join("Musique"), home.join("Music")]
+            .into_iter()
+            .find(|p| p.is_dir())
+            .unwrap_or(home);
         Self {
             open: true,
             dir,
             entries: Vec::new(),
+            selected: 0,
+            scroll: 0,
             dirty: true,
         }
     }
 }
 
 impl Browser {
+    /// Déplace la sélection (encodeur, flèches, molette).
+    pub fn scroll_by(&mut self, delta: i32) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let last = self.entries.len() - 1;
+        self.selected = self
+            .selected
+            .saturating_add_signed(delta as isize)
+            .min(last);
+    }
+
+    /// Entre dans le dossier sélectionné (poussoir de l'encodeur, `→`).
+    pub fn enter(&mut self) {
+        let Some(entry) = self.entries.get(self.selected) else {
+            return;
+        };
+        if entry.is_dir {
+            self.navigate(entry.path.clone());
+        }
+    }
+
+    pub fn go_parent(&mut self) {
+        if let Some(parent) = self.dir.parent() {
+            self.navigate(parent.to_path_buf());
+        }
+    }
+
+    /// Charge la piste sélectionnée sur `deck` (boutons Load du contrôleur,
+    /// touches `F`/`L`, boutons souris).
+    pub fn load_selected(&self, deck: Deck, tx: &LoadSender) {
+        if let Some(entry) = self.entries.get(self.selected)
+            && !entry.is_dir
+        {
+            spawn_load_worker(entry.path.clone(), deck, tx.0.clone());
+        }
+    }
+
     fn navigate(&mut self, dir: PathBuf) {
         self.dir = dir;
+        self.selected = 0;
+        self.scroll = 0;
         self.dirty = true;
     }
 
     fn refresh(&mut self) {
         self.dirty = false;
         self.entries.clear();
+        // Ligne « .. » synthétique : la remontée au parent reste possible
+        // avec le seul encodeur du contrôleur.
+        if let Some(parent) = self.dir.parent() {
+            self.entries.push(Entry {
+                name: "..".into(),
+                path: parent.to_path_buf(),
+                is_dir: true,
+            });
+        }
         let Ok(read) = std::fs::read_dir(&self.dir) else {
             return;
         };
+        let mut listed: Vec<Entry> = Vec::new();
         for entry in read.flatten() {
             let path = entry.path();
             let name = entry.file_name().display().to_string();
@@ -87,96 +154,383 @@ impl Browser {
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()));
             if is_dir || is_audio {
-                self.entries.push(Entry { name, path, is_dir });
+                listed.push(Entry { name, path, is_dir });
             }
         }
-        // Dossiers d'abord, puis fichiers, alphabétique insensible à la casse.
-        self.entries.sort_by(|a, b| {
+        listed.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
+        self.entries.extend(listed);
+        self.selected = self.selected.min(self.entries.len().saturating_sub(1));
     }
 }
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<Browser>) {
-    if keys.just_pressed(KeyCode::KeyB) {
-        browser.open = !browser.open;
+/// Géométrie du panneau, partagée avec les autres systèmes d'entrée
+/// (les clics/molette dans cette zone ne vont ni aux widgets ni au zoom).
+#[derive(Resource, Default, Clone, Copy)]
+pub struct BrowserView {
+    pub rect_center: Vec2,
+    pub rect_size: Vec2,
+    rows_visible: usize,
+}
+
+impl BrowserView {
+    pub fn contains(&self, point: Vec2) -> bool {
+        (point - self.rect_center)
+            .abs()
+            .cmple(self.rect_size * 0.5)
+            .all()
     }
 }
 
-fn draw(
-    mut contexts: EguiContexts,
+#[derive(Component)]
+struct Backdrop;
+#[derive(Component)]
+struct TitleText;
+#[derive(Component)]
+struct HintText;
+#[derive(Component)]
+struct Row(usize);
+#[derive(Component)]
+struct RowHighlight;
+#[derive(Component)]
+struct LoadButton(usize);
+#[derive(Component)]
+struct LoadButtonLabel(usize);
+
+fn spawn_browser(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    fonts: Res<UiFonts>,
+) {
+    let quad = meshes.add(Rectangle::new(1.0, 1.0));
+
+    commands.spawn((
+        Mesh2d(quad.clone()),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(color::SURFACE_RAISED))),
+        Transform::default(),
+        Backdrop,
+    ));
+    commands.spawn((
+        Mesh2d(quad.clone()),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(color::WIDGET_BG))),
+        Transform::default(),
+        RowHighlight,
+    ));
+    commands.spawn((
+        Text2d::new("Bibliothèque"),
+        TextFont {
+            font: fonts.text.clone().into(),
+            font_size: FontSize::Px(font::BODY),
+            ..Default::default()
+        },
+        TextColor(color::TEXT_PRIMARY),
+        Anchor::TOP_LEFT,
+        Transform::default(),
+        TitleText,
+    ));
+    commands.spawn((
+        Text2d::new("↑↓ naviguer   → entrer   F/L → deck   B fermer"),
+        TextFont {
+            font: fonts.text.clone().into(),
+            font_size: FontSize::Px(font::CAPTION),
+            ..Default::default()
+        },
+        TextColor(color::TEXT_MUTED),
+        Anchor::BOTTOM_LEFT,
+        Transform::default(),
+        HintText,
+    ));
+    for index in 0..MAX_ROWS {
+        commands.spawn((
+            Text2d::new(""),
+            TextFont {
+                font: fonts.text.clone().into(),
+                font_size: FontSize::Px(font::CAPTION),
+                ..Default::default()
+            },
+            TextColor(color::TEXT_MUTED),
+            Anchor::CENTER_LEFT,
+            Transform::default(),
+            Row(index),
+        ));
+    }
+    for deck in 0..2 {
+        let accent = if deck == 0 {
+            color::DECK_A
+        } else {
+            color::DECK_B
+        };
+        commands.spawn((
+            Mesh2d(quad.clone()),
+            MeshMaterial2d(materials.add(ColorMaterial::from_color(color::WIDGET_BG))),
+            Transform::default(),
+            LoadButton(deck),
+        ));
+        commands.spawn((
+            Text2d::new(if deck == 0 { "→ A" } else { "→ B" }),
+            TextFont {
+                font: fonts.text.clone().into(),
+                font_size: FontSize::Px(font::CAPTION),
+                ..Default::default()
+            },
+            TextColor(accent),
+            Anchor::CENTER,
+            Transform::default(),
+            LoadButtonLabel(deck),
+        ));
+    }
+}
+
+/// Clavier — modal quand la bibliothèque est ouverte (le contrôleur MIDI,
+/// lui, reste pleinement actif sur les decks).
+fn keys_input(
+    keys: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<Browser>,
     load_tx: Res<LoadSender>,
-) -> Result {
-    if !browser.open {
-        return Ok(());
+) {
+    if keys.just_pressed(KeyCode::KeyB) {
+        browser.open = !browser.open;
+        return;
     }
+    if !browser.open {
+        if keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyL) {
+            browser.open = true;
+        }
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        browser.open = false;
+    }
+    if keys.just_pressed(KeyCode::ArrowUp) {
+        browser.scroll_by(-1);
+    }
+    if keys.just_pressed(KeyCode::ArrowDown) {
+        browser.scroll_by(1);
+    }
+    if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::Enter) {
+        browser.enter();
+    }
+    if keys.just_pressed(KeyCode::ArrowLeft) {
+        browser.go_parent();
+    }
+    if keys.just_pressed(KeyCode::KeyF) {
+        browser.load_selected(Deck::A, &load_tx);
+    }
+    if keys.just_pressed(KeyCode::KeyL) {
+        browser.load_selected(Deck::B, &load_tx);
+    }
+}
+
+fn mouse_input(
+    windows: Query<&Window>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut wheel: MessageReader<MouseWheel>,
+    view: Res<BrowserView>,
+    mut browser: ResMut<Browser>,
+    load_buttons: Query<(&Transform, &LoadButton)>,
+    load_tx: Res<LoadSender>,
+) {
+    if !browser.open {
+        wheel.clear();
+        return;
+    }
+    let Ok(window) = windows.single() else { return };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let point = Vec2::new(
+        cursor.x - window.width() * 0.5,
+        window.height() * 0.5 - cursor.y,
+    );
+    if !view.contains(point) {
+        wheel.clear();
+        return;
+    }
+
+    for event in wheel.read() {
+        browser.scroll_by(if event.y > 0.0 { -3 } else { 3 });
+    }
+
+    if mouse.just_pressed(MouseButton::Left) {
+        for (transform, button) in &load_buttons {
+            let half = transform.scale.truncate() * 0.5;
+            if (point - transform.translation.truncate())
+                .abs()
+                .cmple(half)
+                .all()
+            {
+                let deck = if button.0 == 0 { Deck::A } else { Deck::B };
+                browser.load_selected(deck, &load_tx);
+                return;
+            }
+        }
+        // Clic sur une ligne : sélectionne ; re-clic : entre (dossier).
+        let list_top = view.rect_center.y + view.rect_size.y * 0.5 - 56.0;
+        if point.y <= list_top {
+            let index = ((list_top - point.y) / ROW_HEIGHT) as usize;
+            let target = browser.scroll + index;
+            if target < browser.entries.len() {
+                if browser.selected == target {
+                    browser.enter();
+                } else {
+                    browser.selected = target;
+                }
+            }
+        }
+    }
+}
+
+/// Met à jour visibilités et contenus (uniquement quand l'état change).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn render(
+    mut browser: ResMut<Browser>,
+    view: Res<BrowserView>,
+    mut rows: Query<(&mut Text2d, &mut TextColor, &mut Visibility, &Row)>,
+    mut title: Query<
+        (&mut Text2d, &mut Visibility),
+        (With<TitleText>, Without<Row>, Without<HintText>),
+    >,
+    mut hints: Query<
+        &mut Visibility,
+        (
+            With<HintText>,
+            Without<Row>,
+            Without<TitleText>,
+            Without<Backdrop>,
+        ),
+    >,
+    mut chrome: Query<
+        &mut Visibility,
+        (
+            Or<(
+                With<Backdrop>,
+                With<RowHighlight>,
+                With<LoadButton>,
+                With<LoadButtonLabel>,
+            )>,
+            Without<Row>,
+            Without<TitleText>,
+            Without<HintText>,
+        ),
+    >,
+) {
     if browser.dirty {
         browser.refresh();
     }
-    let ctx = contexts.ctx_mut()?;
-
-    let mut open = browser.open;
-    let mut navigate_to: Option<PathBuf> = None;
-    egui::Window::new("Bibliothèque (B)")
-        .open(&mut open)
-        .default_size([420.0, 420.0])
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("⬆ parent").clicked()
-                    && let Some(parent) = browser.dir.parent()
-                {
-                    navigate_to = Some(parent.to_path_buf());
-                }
-                if ui.button("⟳").clicked() {
-                    browser.dirty = true;
-                }
-                if ui.button("dialogue système…").clicked() {
-                    // rfd (specs §6.3) reste disponible, vers le deck A.
-                    picker::open(Deck::A, load_tx.0.clone());
-                }
-                ui.label(
-                    egui::RichText::new(browser.dir.display().to_string())
-                        .color(egui::Color32::GRAY)
-                        .small(),
-                );
-            });
-            ui.separator();
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for entry in &browser.entries {
-                    ui.horizontal(|ui| {
-                        if entry.is_dir {
-                            if ui.button(format!("📁 {}", entry.name)).clicked() {
-                                navigate_to = Some(entry.path.clone());
-                            }
-                        } else {
-                            if ui.small_button("→ A").clicked() {
-                                spawn_load_worker(entry.path.clone(), Deck::A, load_tx.0.clone());
-                            }
-                            if ui.small_button("→ B").clicked() {
-                                spawn_load_worker(entry.path.clone(), Deck::B, load_tx.0.clone());
-                            }
-                            ui.label(&entry.name);
-                        }
-                    });
-                }
-                if browser.entries.is_empty() {
-                    ui.label(
-                        egui::RichText::new("aucun dossier ni fichier audio ici")
-                            .color(egui::Color32::GRAY),
-                    );
-                }
-            });
-        });
-    browser.open = open;
-    if let Some(dir) = navigate_to {
-        browser.navigate(dir);
+    // Fenêtre de défilement autour de la sélection.
+    let visible = view.rows_visible.max(1);
+    if browser.selected < browser.scroll {
+        browser.scroll = browser.selected;
+    } else if browser.selected >= browser.scroll + visible {
+        browser.scroll = browser.selected + 1 - visible;
     }
-    // Cohérence visuelle minimale avec le thème (le panneau F12 fait le
-    // gros du style ; ici on garde les visuals globaux).
-    let _ = theme::color::SURFACE;
-    Ok(())
+
+    let shown = if browser.open {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut chrome {
+        *visibility = shown;
+    }
+    for mut visibility in &mut hints {
+        *visibility = shown;
+    }
+    if let Ok((mut text, mut visibility)) = title.single_mut() {
+        *visibility = shown;
+        if browser.open {
+            text.0 = format!(
+                "Bibliothèque — {}  ({}/{})",
+                browser.dir.display(),
+                (browser.selected + 1).min(browser.entries.len()),
+                browser.entries.len()
+            );
+        }
+    }
+
+    for (mut text, mut text_color, mut visibility, row) in &mut rows {
+        let index = browser.scroll + row.0;
+        let entry = browser.entries.get(index);
+        let visible_row = browser.open && row.0 < visible && entry.is_some();
+        *visibility = if visible_row {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(entry) = entry
+            && visible_row
+        {
+            let icon = if entry.is_dir { "▸" } else { "♪" };
+            text.0 = format!("{icon} {}", entry.name);
+            text_color.0 = if index == browser.selected {
+                color::TEXT_PRIMARY
+            } else {
+                color::TEXT_MUTED
+            };
+        }
+    }
+}
+
+/// Géométrie du panneau (fractions de fenêtre) et placement des entités.
+#[allow(clippy::type_complexity)]
+fn place(
+    windows: Query<&Window>,
+    browser: Res<Browser>,
+    mut view: ResMut<BrowserView>,
+    mut sets: ParamSet<(
+        Query<&mut Transform, With<Backdrop>>,
+        Query<&mut Transform, With<TitleText>>,
+        Query<&mut Transform, With<HintText>>,
+        Query<(&mut Transform, &Row)>,
+        Query<&mut Transform, With<RowHighlight>>,
+        Query<(&mut Transform, &LoadButton)>,
+        Query<(&mut Transform, &LoadButtonLabel)>,
+    )>,
+) {
+    let Ok(window) = windows.single() else { return };
+    let (w, h) = (window.width(), window.height());
+    let width = (w * 0.30).clamp(300.0, 500.0).min(w - 2.0 * layout::MARGIN);
+    let height = h - 2.0 * layout::MARGIN;
+    let center = Vec2::new(w * 0.5 - width * 0.5 - layout::MARGIN, 0.0);
+
+    let list_top = height * 0.5 - 56.0;
+    let footer = -height * 0.5 + 40.0;
+    view.rect_center = center;
+    view.rect_size = Vec2::new(width, height);
+    view.rows_visible = (((list_top - footer - 20.0) / ROW_HEIGHT) as usize).min(MAX_ROWS);
+
+    if let Ok(mut transform) = sets.p0().single_mut() {
+        transform.translation = center.extend(10.0);
+        transform.scale = Vec3::new(width, height, 1.0);
+    }
+    if let Ok(mut transform) = sets.p1().single_mut() {
+        transform.translation = Vec3::new(center.x - width * 0.5 + 12.0, height * 0.5 - 10.0, 11.0);
+    }
+    if let Ok(mut transform) = sets.p2().single_mut() {
+        transform.translation = Vec3::new(center.x - width * 0.5 + 12.0, -height * 0.5 + 8.0, 11.0);
+    }
+    for (mut transform, row) in &mut sets.p3() {
+        let y = list_top - (row.0 as f32 + 0.5) * ROW_HEIGHT;
+        transform.translation = Vec3::new(center.x - width * 0.5 + 14.0, y, 11.0);
+    }
+    // Surbrillance de la ligne sélectionnée.
+    let selected_offset = browser.selected.saturating_sub(browser.scroll) as f32;
+    if let Ok(mut transform) = sets.p4().single_mut() {
+        let y = list_top - (selected_offset + 0.5) * ROW_HEIGHT;
+        transform.translation = Vec3::new(center.x, y, 10.5);
+        transform.scale = Vec3::new(width - 12.0, ROW_HEIGHT - 2.0, 1.0);
+    }
+    for (mut transform, button) in &mut sets.p5() {
+        let x = center.x + (button.0 as f32 - 0.5) * 96.0;
+        transform.translation = Vec3::new(x, footer - 12.0, 11.0);
+        transform.scale = Vec3::new(84.0, 26.0, 1.0);
+    }
+    for (mut transform, label) in &mut sets.p6() {
+        let x = center.x + (label.0 as f32 - 0.5) * 96.0;
+        transform.translation = Vec3::new(x, footer - 12.0, 12.0);
+    }
 }

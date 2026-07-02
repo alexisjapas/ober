@@ -47,6 +47,9 @@ première génération via Mixxx — corriger `mappings/*.ron` si écart).
 - [ ] Pitch (0x08) : ±8 %, **vérifier le sens** (haut = plus lent attendu ?)
       et l'absence de saut au premier mouvement
 - [ ] Jogs : les messages arrivent (log/debug) — le scratch lui-même : M4
+- [ ] Bibliothèque au contrôleur : encodeur BROWSER (CC 0xB0 0x01) fait
+      défiler, poussoir (0x90 0x00) entre dans les dossiers (ligne « .. »
+      pour remonter), boutons Load chargent la piste sélectionnée
 - [ ] Latence perçue fader → son : imperceptible (chemin court §5.1)
 
 ## M4 — Jogs

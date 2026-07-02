@@ -43,10 +43,14 @@ de la fenêtre en attendant) :
 
 La souris pilote aussi les boutons (play/cue/PFL/load) et les sliders
 (volumes, pitch, EQ, crossfader, casque) — mêmes actions que le MIDI.
-Les pistes se chargent depuis l'explorateur intégré (touche `B`, boutons
-LOAD, bouton Load du contrôleur) ; le dialogue système natif reste
-accessible depuis sa barre d'outils. Le layout est entièrement fluide au
-redimensionnement de la fenêtre.
+
+La **bibliothèque intégrée** (rendu Bevy natif) se pilote au contrôleur —
+encodeur BROWSER pour naviguer, poussoir pour entrer dans un dossier,
+boutons Load pour charger la sélection — comme au clavier (bibliothèque
+ouverte : `↑`/`↓`/`→`/`←` naviguent, `F`/`L` chargent sur A/B, `B` ferme ;
+le contrôleur garde la main sur les decks pendant ce temps) ou à la
+souris. Le dialogue système natif (`rfd`) reste accessible depuis le
+panneau `F12`. Le layout est entièrement fluide au redimensionnement.
 
 Audio : détection automatique d'un périphérique « DJControl » (stream
 4 canaux master + casque s'il le supporte), sinon périphérique par défaut en

@@ -422,6 +422,7 @@ fn interact(
     snapshot: Res<LastSnapshot>,
     mut grab: ResMut<PointerGrab>,
     mut browser: ResMut<Browser>,
+    browser_view: Res<crate::browser::BrowserView>,
 ) {
     use mapping::Action as A;
     use midi::ControlValue as V;
@@ -434,6 +435,10 @@ fn interact(
         cursor.x - window.width() * 0.5,
         window.height() * 0.5 - cursor.y,
     );
+    // Les clics dans la bibliothèque ouverte lui appartiennent.
+    if browser.open && browser_view.contains(point) && mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
     let deck = |i: usize| {
         if i == 0 {
             mapping::Deck::A

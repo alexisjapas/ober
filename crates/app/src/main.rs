@@ -29,9 +29,14 @@
 //! | `R` / `P`               | remise à zéro du pitch A / B        |
 //! | `N` `M`                 | mix casque cue ↔ master             |
 //! | `J` `K`                 | gain casque − / +                   |
-//! | `B` (ou `F`/`L`)        | bibliothèque (explorateur intégré)  |
+//! | `B` (ou `F`/`L`)        | bibliothèque intégrée (Bevy natif)  |
 //! | `F12`                   | panneau préférences/diagnostics     |
 //! | molette                 | zoom des waveforms                  |
+//!
+//! Bibliothèque ouverte, le clavier lui est dédié (`↑`/`↓` naviguer, `→`
+//! entrer, `←` parent, `F`/`L` charger sur A/B, `B`/`Échap` fermer) — le
+//! contrôleur reste actif sur les decks, et son encodeur BROWSER + ses
+//! boutons Load pilotent la bibliothèque.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -512,6 +517,7 @@ fn midi_sync(
     mut midi: ResMut<MidiRes>,
     mut mix: ResMut<MixState>,
     mut browser: ResMut<browser::Browser>,
+    load_tx: Res<LoadSender>,
 ) {
     while let Ok(status) = midi.status.try_recv() {
         match status {
@@ -527,10 +533,25 @@ fn midi_sync(
     }
 
     while let Ok(event) = midi.events.try_recv() {
-        if let (mapping::Action::Load { .. }, ControlValue::Pressed(true)) =
-            (event.action, event.value)
-        {
-            browser.open = true;
+        // Navigation bibliothèque au contrôleur (encodeur + boutons Load).
+        match (event.action, event.value) {
+            (mapping::Action::Load { deck }, ControlValue::Pressed(true)) => {
+                if browser.open {
+                    let deck = match deck {
+                        mapping::Deck::A => Deck::A,
+                        mapping::Deck::B => Deck::B,
+                    };
+                    browser.load_selected(deck, &load_tx);
+                } else {
+                    browser.open = true;
+                }
+            }
+            (mapping::Action::LibraryScroll, ControlValue::Relative(n)) => {
+                browser.open = true;
+                browser.scroll_by(n);
+            }
+            (mapping::Action::LibraryEnter, ControlValue::Pressed(true)) => browser.enter(),
+            _ => {}
         }
         mirror_event(&event, &mut mix);
     }
@@ -545,14 +566,15 @@ fn keyboard_controls(
     engine: Res<AudioEngine>,
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
-    mut browser: ResMut<browser::Browser>,
+    browser: Res<browser::Browser>,
 ) {
     use mapping::{Action, Deck as MDeck};
     use midi::ControlValue as V;
 
-    // Chargement de piste : explorateur intégré (touche B aussi).
-    if keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyL) {
-        browser.open = true;
+    // Bibliothèque ouverte : le clavier lui est dédié (navigation modale
+    // gérée par browser::keys_input) — le contrôleur MIDI reste actif.
+    if browser.open {
+        return;
     }
 
     let mut eng = engine.0.lock().unwrap();

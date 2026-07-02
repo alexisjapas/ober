@@ -66,6 +66,10 @@ pub enum Action {
     Load {
         deck: Deck,
     },
+    /// Encodeur de navigation dans la bibliothèque (`Relative`).
+    LibraryScroll,
+    /// Poussoir de l'encodeur : entrer dans le dossier sélectionné.
+    LibraryEnter,
     CrossFader,
     MasterGain,
     HeadphoneGain,

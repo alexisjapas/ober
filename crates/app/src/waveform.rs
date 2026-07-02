@@ -193,7 +193,27 @@ fn points_image(points: &[[f32; 4]]) -> Image {
 }
 
 /// Zoom à la molette : niveaux mipmap 1×/4×/16× côté texture (specs §6.3).
-fn zoom_input(mut wheel: MessageReader<MouseWheel>, mut zoom: ResMut<WaveZoom>) {
+/// La molette au-dessus de la bibliothèque ouverte lui appartient.
+fn zoom_input(
+    windows: Query<&Window>,
+    mut wheel: MessageReader<MouseWheel>,
+    mut zoom: ResMut<WaveZoom>,
+    browser: Res<crate::browser::Browser>,
+    view: Res<crate::browser::BrowserView>,
+) {
+    if browser.open
+        && let Ok(window) = windows.single()
+        && let Some(cursor) = window.cursor_position()
+    {
+        let point = Vec2::new(
+            cursor.x - window.width() * 0.5,
+            window.height() * 0.5 - cursor.y,
+        );
+        if view.contains(point) {
+            wheel.clear();
+            return;
+        }
+    }
     for event in wheel.read() {
         let factor = if event.y > 0.0 { 1.0 / 1.25 } else { 1.25 };
         zoom.seconds = (zoom.seconds * factor).clamp(2.0, 180.0);

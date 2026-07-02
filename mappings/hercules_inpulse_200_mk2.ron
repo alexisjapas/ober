@@ -38,9 +38,13 @@ Mapping(
         (input: NoteOn(ch: 1, note: 0x0C), action: HeadphoneCue(deck: A), mode: Toggle),
         (input: NoteOn(ch: 2, note: 0x0C), action: HeadphoneCue(deck: B), mode: Toggle),
 
-        // --- Chargement de piste (émis vers l'UI ; file picker au M6) ---
+        // --- Bibliothèque (encodeur BROWSER + boutons Load) ---
+        // Bibliothèque ouverte : Load charge la piste sélectionnée sur le
+        // deck ; fermée : Load ouvre la bibliothèque.
         (input: NoteOn(ch: 1, note: 0x0D), action: Load(deck: A), mode: Momentary),
         (input: NoteOn(ch: 2, note: 0x0D), action: Load(deck: B), mode: Momentary),
+        (input: CC(ch: 0, cc: 0x01), action: LibraryScroll, mode: Relative(encoding: TwosComplement)),
+        (input: NoteOn(ch: 0, note: 0x00), action: LibraryEnter, mode: Momentary),
 
         // --- Mixage ---
         (input: CC(ch: 0, cc: 0x00), action: CrossFader, mode: Absolute()),
