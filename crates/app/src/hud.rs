@@ -48,7 +48,12 @@ fn spawn_hud(mut commands: Commands, fonts: Res<UiFonts>) {
                 ..Default::default()
             },
             TextColor(accent),
-            Anchor::TOP_LEFT,
+            // Deck A en haut à gauche, deck B en haut à droite (bandeau).
+            if deck == 0 {
+                Anchor::TOP_LEFT
+            } else {
+                Anchor::TOP_RIGHT
+            },
             Transform::default(),
             DeckText(deck),
         ));
@@ -157,13 +162,15 @@ fn layout_texts(
 ) {
     let Ok(window) = windows.single() else { return };
     let (half_w, half_h) = (window.width() * 0.5, window.height() * 0.5);
-    let wave_h = window.height() * layout::WAVE_HEIGHT_FRAC;
 
+    // Bandeau supérieur : deck A à gauche, deck B à droite.
     for (mut transform, deck) in &mut deck_texts {
-        // Au-dessus de chaque bande waveform.
-        let wave_center = if deck.0 == 0 { 1.0 } else { -1.0 } * wave_h * 0.58;
-        let y = wave_center + wave_h * 0.5 + layout::MARGIN * 2.6;
-        transform.translation = Vec3::new(-half_w + layout::MARGIN, y, 2.0);
+        let x = if deck.0 == 0 {
+            -half_w + layout::MARGIN
+        } else {
+            half_w - layout::MARGIN
+        };
+        transform.translation = Vec3::new(x, half_h - layout::MARGIN * 0.6, 2.0);
     }
     if let Ok(mut transform) = status_texts.single_mut() {
         transform.translation = Vec3::new(

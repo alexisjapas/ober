@@ -37,12 +37,16 @@ de la fenêtre en attendant) :
 | `R` / `P`           | reset pitch A / B            |
 | `N` `M`             | mix casque cue ↔ master      |
 | `J` `K`             | gain casque − / +            |
-| `F` / `L`           | charger une piste (A / B)    |
+| `B` (ou `F`/`L`)    | bibliothèque intégrée        |
 | `F12`               | préférences / diagnostics    |
 | molette             | zoom des waveforms           |
 
 La souris pilote aussi les boutons (play/cue/PFL/load) et les sliders
 (volumes, pitch, EQ, crossfader, casque) — mêmes actions que le MIDI.
+Les pistes se chargent depuis l'explorateur intégré (touche `B`, boutons
+LOAD, bouton Load du contrôleur) ; le dialogue système natif reste
+accessible depuis sa barre d'outils. Le layout est entièrement fluide au
+redimensionnement de la fenêtre.
 
 Audio : détection automatique d'un périphérique « DJControl » (stream
 4 canaux master + casque s'il le supporte), sinon périphérique par défaut en

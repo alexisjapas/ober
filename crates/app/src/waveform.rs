@@ -355,11 +355,9 @@ fn update_playheads(
 /// horizontales superposées, specs §6.3). Aucune géométrie touchée.
 fn layout(windows: Query<&Window>, mut quads: Query<(&mut Transform, &WaveformQuad)>) {
     let Ok(window) = windows.single() else { return };
-    let width = window.width() * theme::layout::WAVE_WIDTH_FRAC;
-    let height = window.height() * theme::layout::WAVE_HEIGHT_FRAC;
+    let bands = theme::layout::bands(window.width(), window.height());
     for (mut transform, quad) in &mut quads {
-        let y = if quad.0 == 0 { 1.0 } else { -1.0 } * height * 0.58;
-        transform.translation = Vec3::new(0.0, y, 0.0);
-        transform.scale = Vec3::new(width, height, 1.0);
+        transform.translation = Vec3::new(0.0, bands.wave_center[quad.0], 0.0);
+        transform.scale = Vec3::new(bands.wave_width, bands.wave_height, 1.0);
     }
 }

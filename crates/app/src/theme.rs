@@ -29,6 +29,8 @@ pub mod color {
     pub const BACKGROUND: Color = srgb(0.024, 0.027, 0.039);
     /// Fond des zones de contenu (waveforms, VU).
     pub const SURFACE: Color = srgb(0.045, 0.05, 0.07);
+    /// Panneaux légèrement surélevés (zones de widgets).
+    pub const SURFACE_RAISED: Color = srgb(0.062, 0.068, 0.094);
 
     pub const TEXT_PRIMARY: Color = srgb(0.92, 0.93, 0.96);
     pub const TEXT_MUTED: Color = srgb(0.55, 0.58, 0.66);
@@ -63,21 +65,58 @@ pub mod font {
     pub const CAPTION: f32 = 11.5;
 }
 
-/// Espacements et proportions de l'écran unique (specs §6.3).
+/// Proportions de l'écran unique (specs §6.3). TOUT est exprimé en
+/// fractions de la fenêtre : le layout se réarrange au redimensionnement.
+///
+/// ```text
+/// header (textes decks)          HEADER_FRAC
+/// waveform A                     WAVE_HEIGHT_FRAC
+/// bande de contrôles             (le reste)
+/// waveform B                     WAVE_HEIGHT_FRAC
+/// barre d'état                   STATUS_FRAC
+/// ```
 pub mod layout {
     /// Marge extérieure, px.
     pub const MARGIN: f32 = 16.0;
-    /// Fraction de la hauteur de fenêtre occupée par chaque waveform.
-    pub const WAVE_HEIGHT_FRAC: f32 = 0.26;
-    /// Fraction de la largeur occupée par les waveforms (les colonnes de
-    /// widgets par deck occupent les bords).
-    pub const WAVE_WIDTH_FRAC: f32 = 0.74;
-    /// Largeur des colonnes de widgets par deck, px.
-    pub const SIDE_COLUMN_PX: f32 = 120.0;
-    /// Dimensions d'une barre de VU master, px.
+    /// Espacement standard entre éléments, px.
+    pub const GAP: f32 = 8.0;
+    pub const HEADER_FRAC: f32 = 0.085;
+    pub const STATUS_FRAC: f32 = 0.055;
+    /// Fraction de la hauteur occupée par chaque waveform.
+    pub const WAVE_HEIGHT_FRAC: f32 = 0.24;
+    /// Fraction de la largeur occupée par les waveforms.
+    pub const WAVE_WIDTH_FRAC: f32 = 0.96;
+    /// Largeur d'une barre de VU master, px.
     pub const VU_WIDTH: f32 = 14.0;
-    pub const VU_HEIGHT: f32 = 120.0;
     pub const VU_GAP: f32 = 6.0;
+
+    /// Bandes verticales calculées pour une taille de fenêtre (repère
+    /// centré Bevy 2D : +y vers le haut).
+    #[derive(Debug, Clone, Copy)]
+    pub struct Bands {
+        /// Centres verticaux des waveforms (A, B).
+        pub wave_center: [f32; 2],
+        pub wave_height: f32,
+        pub wave_width: f32,
+        /// Bande de contrôles entre les deux waveforms.
+        pub controls_center: f32,
+        pub controls_height: f32,
+    }
+
+    pub fn bands(width: f32, height: f32) -> Bands {
+        let wave_height = height * WAVE_HEIGHT_FRAC;
+        let top = height * (0.5 - HEADER_FRAC) - wave_height * 0.5;
+        let bottom = -(height * (0.5 - STATUS_FRAC) - wave_height * 0.5);
+        let inner_top = top - wave_height * 0.5 - GAP;
+        let inner_bottom = bottom + wave_height * 0.5 + GAP;
+        Bands {
+            wave_center: [top, bottom],
+            wave_height,
+            wave_width: width * WAVE_WIDTH_FRAC,
+            controls_center: (inner_top + inner_bottom) * 0.5,
+            controls_height: (inner_top - inner_bottom).max(60.0),
+        }
+    }
 }
 
 /// Courbes d'easing centralisées (specs §6.2) : toute animation passe par

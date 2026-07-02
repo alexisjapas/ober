@@ -29,7 +29,7 @@
 //! | `R` / `P`               | remise à zéro du pitch A / B        |
 //! | `N` `M`                 | mix casque cue ↔ master             |
 //! | `J` `K`                 | gain casque − / +                   |
-//! | `F` / `L`               | charger une piste (deck A / B)      |
+//! | `B` (ou `F`/`L`)        | bibliothèque (explorateur intégré)  |
 //! | `F12`                   | panneau préférences/diagnostics     |
 //! | molette                 | zoom des waveforms                  |
 
@@ -37,6 +37,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
+mod browser;
 mod fonts;
 mod hud;
 mod panel;
@@ -88,6 +89,7 @@ fn main() {
             hud::HudPlugin,
             widgets::WidgetsPlugin,
             panel::PanelPlugin,
+            browser::BrowserPlugin,
             power::PowerPlugin,
         ))
         .add_systems(Startup, setup)
@@ -499,7 +501,11 @@ fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
 /// Copie UI du flux MIDI (specs §5.1) : le chemin court a déjà envoyé les
 /// commandes au moteur depuis le thread MIDI ; ici on ne fait que refléter
 /// les valeurs dans l'état d'affichage et traiter les actions purement UI.
-fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>, load_tx: Res<LoadSender>) {
+fn midi_sync(
+    mut midi: ResMut<MidiRes>,
+    mut mix: ResMut<MixState>,
+    mut browser: ResMut<browser::Browser>,
+) {
     while let Ok(status) = midi.status.try_recv() {
         match status {
             MidiStatus::Connected(name) => {
@@ -514,14 +520,10 @@ fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>, load_tx: Res<
     }
 
     while let Ok(event) = midi.events.try_recv() {
-        if let (mapping::Action::Load { deck }, ControlValue::Pressed(true)) =
+        if let (mapping::Action::Load { .. }, ControlValue::Pressed(true)) =
             (event.action, event.value)
         {
-            let deck = match deck {
-                mapping::Deck::A => Deck::A,
-                mapping::Deck::B => Deck::B,
-            };
-            picker::open(deck, load_tx.0.clone());
+            browser.open = true;
         }
         mirror_event(&event, &mut mix);
     }
@@ -536,17 +538,14 @@ fn keyboard_controls(
     engine: Res<AudioEngine>,
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
-    load_tx: Res<LoadSender>,
+    mut browser: ResMut<browser::Browser>,
 ) {
     use mapping::{Action, Deck as MDeck};
     use midi::ControlValue as V;
 
-    // Chargement de piste (file picker natif, specs §6.3).
-    if keys.just_pressed(KeyCode::KeyF) {
-        picker::open(Deck::A, load_tx.0.clone());
-    }
-    if keys.just_pressed(KeyCode::KeyL) {
-        picker::open(Deck::B, load_tx.0.clone());
+    // Chargement de piste : explorateur intégré (touche B aussi).
+    if keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyL) {
+        browser.open = true;
     }
 
     let mut eng = engine.0.lock().unwrap();

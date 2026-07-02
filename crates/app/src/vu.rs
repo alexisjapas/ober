@@ -115,14 +115,18 @@ fn update_levels(
     }
 }
 
-/// Section centrale : les deux barres au milieu, entre les waveforms.
+/// Section centrale : les deux barres au milieu de la bande de contrôles,
+/// dimensionnées en fractions de la fenêtre.
 fn layout(windows: Query<&Window>, mut bars: Query<(&mut Transform, &VuBar)>) {
-    let Ok(_window) = windows.single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
+    let bands = theme::layout::bands(window.width(), window.height());
+    let height = (bands.controls_height * 0.42).clamp(56.0, 170.0);
+    let y = bands.controls_center + bands.controls_height * 0.16;
     for (mut transform, bar) in &mut bars {
         let x = (bar.channel as f32 - 0.5) * (theme::layout::VU_WIDTH + theme::layout::VU_GAP);
-        transform.translation = Vec3::new(x, 0.0, 1.0);
-        transform.scale = Vec3::new(theme::layout::VU_WIDTH, theme::layout::VU_HEIGHT, 1.0);
+        transform.translation = Vec3::new(x, y, 3.0);
+        transform.scale = Vec3::new(theme::layout::VU_WIDTH, height, 1.0);
     }
 }

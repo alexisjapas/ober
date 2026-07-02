@@ -1,21 +1,27 @@
-//! Widgets souris de l'écran unique (specs §6.3) : par deck, boutons
-//! play/cue/PFL/load et sliders volume/pitch/EQ ; au centre, crossfader,
-//! mix cue↔master, gain casque et master autour des VU.
+//! Widgets souris de l'écran unique (specs §6.3), disposés dans la bande de
+//! contrôles entre les deux waveforms :
 //!
-//! Rendu : quads `ColorMaterial` + étiquettes `Text2d` (Inter), couleurs et
-//! espacements du thème. Interaction : hit-testing manuel curseur → monde
-//! (aucune dépendance à un backend de picking). Chaque interaction émet les
-//! mêmes `mapping::Action` que le MIDI (specs §6.4) via
-//! [`crate::emit_control`].
+//! ```text
+//! [ deck A: PLAY CUE PFL LOAD ]  [ cue φ VU master ]  [ deck B: … ]
+//! [        vol pitch l m h    ]  [   crossfader    ]  [    …      ]
+//! ```
+//!
+//! TOUT le layout est exprimé en fractions de la fenêtre (`theme::layout`) :
+//! il se réarrange au redimensionnement. Rendu : panneaux de fond, pistes de
+//! sliders avec jauge de remplissage et curseur, étiquettes Inter — couleurs
+//! du thème uniquement. Interaction : hit-testing manuel curseur → monde ;
+//! chaque geste émet les mêmes `mapping::Action` que le MIDI (specs §6.4)
+//! via [`crate::emit_control`].
 
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
 use engine::dsp::eq::{EQ_MAX_DB, EQ_MIN_DB};
 
+use crate::browser::Browser;
 use crate::fonts::UiFonts;
 use crate::theme::{color, font, layout};
-use crate::{AudioEngine, LastSnapshot, LoadSender, MixState, PITCH_RANGE, emit_control, picker};
+use crate::{AudioEngine, LastSnapshot, MixState, PITCH_RANGE, emit_control};
 
 pub struct WidgetsPlugin;
 
@@ -51,6 +57,24 @@ impl SliderKind {
     fn horizontal(self) -> bool {
         matches!(self, SliderKind::CrossFader)
     }
+
+    /// Le crossfader est bipolaire : la jauge part du centre.
+    fn bipolar(self) -> bool {
+        matches!(self, SliderKind::CrossFader | SliderKind::Pitch(_))
+    }
+
+    fn accent(self) -> Color {
+        match self {
+            SliderKind::Volume(d) | SliderKind::Pitch(d) | SliderKind::Eq(d, _) => {
+                if d == 0 {
+                    color::DECK_A
+                } else {
+                    color::DECK_B
+                }
+            }
+            _ => color::TEXT_MUTED,
+        }
+    }
 }
 
 #[derive(Component, Clone, Copy)]
@@ -59,13 +83,21 @@ enum Widget {
     Slider(SliderKind),
 }
 
-/// Curseur d'un slider (positionné selon la valeur courante).
+/// Jauge de remplissage d'un slider.
+#[derive(Component)]
+struct Fill(SliderKind);
+
+/// Curseur d'un slider.
 #[derive(Component)]
 struct Thumb(SliderKind);
 
-/// Étiquette d'un widget (positionnée par rapport à son slot).
+/// Étiquette d'un widget.
 #[derive(Component)]
 struct Label(Widget);
+
+/// Panneaux de fond : 0 = deck A, 1 = deck B, 2 = mixer central.
+#[derive(Component)]
+struct Panel(usize);
 
 #[derive(Resource, Default)]
 struct PointerGrab {
@@ -118,44 +150,74 @@ fn slider_event(kind: SliderKind, t: f32) -> (mapping::Action, midi::ControlValu
     }
 }
 
-/// Slot (centre, taille) d'un widget pour une fenêtre donnée — source
-/// unique pour le layout, le hit-testing et les étiquettes.
+/// Zones horizontales de la bande de contrôles : (centre x, largeur).
+fn deck_zone(deck: usize, width: f32) -> (f32, f32) {
+    let hw = width * 0.5;
+    let inner = width * 0.20; // bord intérieur (début de la zone mixer)
+    let zone_width = hw - inner - layout::MARGIN;
+    let center = -(inner + zone_width * 0.5);
+    if deck == 0 {
+        (center, zone_width)
+    } else {
+        (-center, zone_width)
+    }
+}
+
+/// Slot (centre, taille) d'un widget — source unique pour le layout, le
+/// hit-testing, les jauges et les étiquettes. Tout en fractions de fenêtre.
 fn slot(widget: Widget, window: &Window) -> (Vec2, Vec2) {
-    let (hw, hh) = (window.width() * 0.5, window.height() * 0.5);
-    let column_x = |deck: usize| {
-        let x = hw - layout::MARGIN - layout::SIDE_COLUMN_PX * 0.5;
-        if deck == 0 { -x } else { x }
-    };
+    let (w, h) = (window.width(), window.height());
+    let bands = layout::bands(w, h);
+    let (cy, ch) = (bands.controls_center, bands.controls_height);
+
     match widget {
         Widget::Button(kind) => {
-            let (deck, row) = match kind {
+            let (deck, index) = match kind {
                 ButtonKind::Play(d) => (d, 0.0),
                 ButtonKind::Cue(d) => (d, 1.0),
                 ButtonKind::Pfl(d) => (d, 2.0),
                 ButtonKind::Load(d) => (d, 3.0),
             };
+            let (zx, zw) = deck_zone(deck, w);
+            let button_w = (zw - 3.0 * layout::GAP) / 4.0;
+            let x = zx - zw * 0.5 + button_w * 0.5 + index * (button_w + layout::GAP);
+            let y = cy + ch * 0.30;
             (
-                Vec2::new(column_x(deck), hh - 56.0 - row * 46.0),
-                Vec2::new(96.0, 34.0),
+                Vec2::new(x, y),
+                Vec2::new(button_w, (ch * 0.20).clamp(24.0, 42.0)),
             )
         }
         Widget::Slider(kind) => match kind {
-            SliderKind::Volume(d) => (
-                Vec2::new(column_x(d) - 26.0, hh - 320.0),
-                Vec2::new(14.0, 140.0),
+            SliderKind::Volume(_) | SliderKind::Pitch(_) | SliderKind::Eq(..) => {
+                let (deck, index) = match kind {
+                    SliderKind::Volume(d) => (d, 0.0),
+                    SliderKind::Pitch(d) => (d, 1.0),
+                    SliderKind::Eq(d, band) => (d, 2.0 + band as f32),
+                    _ => unreachable!(),
+                };
+                let (zx, zw) = deck_zone(deck, w);
+                let x = zx - zw * 0.5 + zw * (index + 0.5) / 5.0;
+                let y = cy - ch * 0.17;
+                (
+                    Vec2::new(x, y),
+                    Vec2::new(10.0, (ch * 0.45).clamp(56.0, 180.0)),
+                )
+            }
+            SliderKind::CrossFader => (
+                Vec2::new(0.0, cy - ch * 0.30),
+                Vec2::new((w * 0.24).clamp(150.0, 380.0), 10.0),
             ),
-            SliderKind::Pitch(d) => (
-                Vec2::new(column_x(d) + 26.0, hh - 320.0),
-                Vec2::new(14.0, 140.0),
-            ),
-            SliderKind::Eq(d, band) => (
-                Vec2::new(column_x(d) + (band as f32 - 1.0) * 26.0, hh - 490.0),
-                Vec2::new(12.0, 100.0),
-            ),
-            SliderKind::CrossFader => (Vec2::new(-170.0, 0.0), Vec2::new(200.0, 12.0)),
-            SliderKind::CueMix => (Vec2::new(60.0, 0.0), Vec2::new(10.0, 90.0)),
-            SliderKind::Headphone => (Vec2::new(90.0, 0.0), Vec2::new(10.0, 90.0)),
-            SliderKind::Master => (Vec2::new(120.0, 0.0), Vec2::new(10.0, 90.0)),
+            SliderKind::CueMix | SliderKind::Headphone | SliderKind::Master => {
+                let x = match kind {
+                    SliderKind::CueMix => -w * 0.075,
+                    SliderKind::Headphone => -w * 0.045,
+                    _ => w * 0.055,
+                };
+                (
+                    Vec2::new(x, cy + ch * 0.16),
+                    Vec2::new(10.0, (ch * 0.40).clamp(50.0, 150.0)),
+                )
+            }
         },
     }
 }
@@ -207,6 +269,16 @@ fn spawn_widgets(
     fonts: Res<UiFonts>,
 ) {
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
+
+    for zone in 0..3 {
+        commands.spawn((
+            Mesh2d(quad.clone()),
+            MeshMaterial2d(materials.add(ColorMaterial::from_color(color::SURFACE_RAISED))),
+            Transform::default(),
+            Panel(zone),
+        ));
+    }
+
     for widget in all_widgets() {
         commands.spawn((
             Mesh2d(quad.clone()),
@@ -214,14 +286,10 @@ fn spawn_widgets(
             Transform::default(),
             widget,
         ));
-        if let Widget::Slider(kind) = widget {
-            commands.spawn((
-                Mesh2d(quad.clone()),
-                MeshMaterial2d(materials.add(ColorMaterial::from_color(color::THUMB))),
-                Transform::default(),
-                Thumb(kind),
-            ));
-        }
+        let label_color = match widget {
+            Widget::Button(_) => color::TEXT_PRIMARY,
+            Widget::Slider(_) => color::TEXT_MUTED,
+        };
         commands.spawn((
             Text2d::new(label_text(widget)),
             TextFont {
@@ -229,47 +297,115 @@ fn spawn_widgets(
                 font_size: FontSize::Px(font::CAPTION),
                 ..Default::default()
             },
-            TextColor(color::TEXT_MUTED),
+            TextColor(label_color),
             Anchor::CENTER,
             Transform::default(),
             Label(widget),
         ));
+        if let Widget::Slider(kind) = widget {
+            commands.spawn((
+                Mesh2d(quad.clone()),
+                MeshMaterial2d(materials.add(ColorMaterial::from_color(kind.accent()))),
+                Transform::default(),
+                Fill(kind),
+            ));
+            commands.spawn((
+                Mesh2d(quad.clone()),
+                MeshMaterial2d(materials.add(ColorMaterial::from_color(color::THUMB))),
+                Transform::default(),
+                Thumb(kind),
+            ));
+        }
     }
 }
 
-/// Positionne quads, curseurs et étiquettes depuis `slot` (recalcul par
-/// frame : quelques multiplications, aucune géométrie touchée).
+/// Positionne panneaux, pistes, jauges, curseurs et étiquettes depuis
+/// `slot` (recalcul par frame : quelques multiplications, aucune géométrie
+/// touchée).
 #[allow(clippy::type_complexity)] // filtres de requêtes Bevy disjointes
 fn place_widgets(
     windows: Query<&Window>,
     mix: Res<MixState>,
-    mut quads: Query<(&mut Transform, &Widget), (Without<Thumb>, Without<Label>)>,
-    mut thumbs: Query<(&mut Transform, &Thumb), (Without<Widget>, Without<Label>)>,
-    mut labels: Query<(&mut Transform, &Label), (Without<Widget>, Without<Thumb>)>,
+    mut sets: ParamSet<(
+        Query<(&mut Transform, &Widget)>,
+        Query<(&mut Transform, &Fill)>,
+        Query<(&mut Transform, &Thumb)>,
+        Query<(&mut Transform, &Label)>,
+        Query<(&mut Transform, &Panel)>,
+    )>,
 ) {
     let Ok(window) = windows.single() else { return };
+    let window = window.clone();
+    let (w, h) = (window.width(), window.height());
+    let bands = layout::bands(w, h);
 
-    for (mut transform, widget) in &mut quads {
-        let (center, size) = slot(*widget, window);
+    for (mut transform, panel) in &mut sets.p4() {
+        let (x, width) = match panel.0 {
+            0 => deck_zone(0, w),
+            1 => deck_zone(1, w),
+            _ => (0.0, w * 0.36),
+        };
+        transform.translation = Vec3::new(x, bands.controls_center, 2.0);
+        transform.scale = Vec3::new(width + layout::GAP * 2.0, bands.controls_height, 1.0);
+    }
+
+    for (mut transform, widget) in &mut sets.p0() {
+        let (center, size) = slot(*widget, &window);
         transform.translation = center.extend(3.0);
         transform.scale = Vec3::new(size.x, size.y, 1.0);
     }
-    for (mut transform, thumb) in &mut thumbs {
-        let (center, size) = slot(Widget::Slider(thumb.0), window);
+
+    for (mut transform, fill) in &mut sets.p1() {
+        let (center, size) = slot(Widget::Slider(fill.0), &window);
+        let t = slider_value(fill.0, &mix);
+        let (offset, fill_size) = if fill.0.horizontal() {
+            if fill.0.bipolar() {
+                let extent = (t - 0.5) * size.x;
+                (
+                    Vec2::new(extent * 0.5, 0.0),
+                    Vec2::new(extent.abs(), size.y),
+                )
+            } else {
+                let extent = t * size.x;
+                (
+                    Vec2::new((extent - size.x) * 0.5, 0.0),
+                    Vec2::new(extent, size.y),
+                )
+            }
+        } else if fill.0.bipolar() {
+            let extent = (t - 0.5) * size.y;
+            (
+                Vec2::new(0.0, extent * 0.5),
+                Vec2::new(size.x, extent.abs()),
+            )
+        } else {
+            let extent = t * size.y;
+            (
+                Vec2::new(0.0, (extent - size.y) * 0.5),
+                Vec2::new(size.x, extent),
+            )
+        };
+        transform.translation = (center + offset).extend(3.5);
+        transform.scale = Vec3::new(fill_size.x.max(0.5), fill_size.y.max(0.5), 1.0);
+    }
+
+    for (mut transform, thumb) in &mut sets.p2() {
+        let (center, size) = slot(Widget::Slider(thumb.0), &window);
         let t = slider_value(thumb.0, &mix) - 0.5;
         let (offset, thumb_size) = if thumb.0.horizontal() {
-            (Vec2::new(t * size.x, 0.0), Vec2::new(8.0, size.y + 8.0))
+            (Vec2::new(t * size.x, 0.0), Vec2::new(6.0, size.y + 10.0))
         } else {
-            (Vec2::new(0.0, t * size.y), Vec2::new(size.x + 8.0, 8.0))
+            (Vec2::new(0.0, t * size.y), Vec2::new(size.x + 10.0, 6.0))
         };
         transform.translation = (center + offset).extend(4.0);
         transform.scale = Vec3::new(thumb_size.x, thumb_size.y, 1.0);
     }
-    for (mut transform, label) in &mut labels {
-        let (center, size) = slot(label.0, window);
+
+    for (mut transform, label) in &mut sets.p3() {
+        let (center, size) = slot(label.0, &window);
         let position = match label.0 {
             Widget::Button(_) => center,
-            Widget::Slider(_) => center - Vec2::new(0.0, size.y * 0.5 + 12.0),
+            Widget::Slider(_) => center - Vec2::new(0.0, size.y * 0.5 + 11.0),
         };
         transform.translation = position.extend(5.0);
     }
@@ -285,7 +421,7 @@ fn interact(
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
     mut grab: ResMut<PointerGrab>,
-    load_tx: Res<LoadSender>,
+    mut browser: ResMut<Browser>,
 ) {
     use mapping::Action as A;
     use midi::ControlValue as V;
@@ -342,16 +478,7 @@ fn interact(
                             V::Toggled(!cue),
                         );
                     }
-                    ButtonKind::Load(i) => {
-                        picker::open(
-                            if i == 0 {
-                                engine::Deck::A
-                            } else {
-                                engine::Deck::B
-                            },
-                            load_tx.0.clone(),
-                        );
-                    }
+                    ButtonKind::Load(_) => browser.open = true,
                 }
             }
             Some(Widget::Slider(kind)) => grab.slider = Some(kind),
