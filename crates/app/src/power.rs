@@ -1,8 +1,12 @@
-//! Gestion de l'énergie (specs §6.5) : la game loop continue est le
-//! comportement voulu en lecture ; à l'idle (aucun deck en lecture, aucune
-//! interaction depuis > 5 s), le framerate cible tombe à 10 fps via
-//! `WinitSettings`. Retour immédiat au framerate natif à la moindre
-//! interaction ou lecture — le thread audio n'est jamais affecté.
+//! Power management (specs §6.5): the continuous game loop is the intended
+//! behavior during playback; at idle (no deck playing, no interaction for
+//! more than 5 s) the target framerate drops to 10 fps via
+//! `WinitSettings`. Immediate return to the native framerate on any
+//! interaction or playback — the audio thread is never affected.
+//!
+//! An interaction is an *intent*, whatever its source (specs §6.4): winit
+//! inputs (keyboard, mouse) are read here; MIDI controller events don't go
+//! through winit, so the system draining them marks [`ControlActivity`].
 
 use std::time::Duration;
 
@@ -25,6 +29,7 @@ impl Plugin for PowerPlugin {
             unfocused_mode: UpdateMode::Continuous,
         })
         .init_resource::<Activity>()
+        .init_resource::<ControlActivity>()
         .add_systems(Update, power_management);
     }
 }
@@ -35,6 +40,26 @@ struct Activity {
     idle: bool,
 }
 
+/// Interaction signal for control sources that bypass winit (the MIDI
+/// controller, specs §5.1): faders, knobs, buttons and encoders must wake
+/// the UI from idle exactly like the keyboard and mouse do. The flag
+/// persists until `power_management` consumes it, so marker systems can run
+/// in any order relative to it.
+#[derive(Resource, Default)]
+pub struct ControlActivity {
+    marked: bool,
+}
+
+impl ControlActivity {
+    pub fn mark(&mut self) {
+        self.marked = true;
+    }
+
+    fn take(&mut self) -> bool {
+        std::mem::take(&mut self.marked)
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par source d'activité
 fn power_management(
     time: Res<Time>,
@@ -43,10 +68,15 @@ fn power_management(
     mut motion: MessageReader<MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
     mut buttons: MessageReader<MouseButtonInput>,
+    mut controls: ResMut<ControlActivity>,
     mut activity: ResMut<Activity>,
     mut settings: ResMut<WinitSettings>,
 ) {
-    let interacting = keys.get_pressed().next().is_some()
+    // Consumed unconditionally: the flag must never survive a frame where
+    // another source already reset the idle timer.
+    let midi_activity = controls.take();
+    let interacting = midi_activity
+        || keys.get_pressed().next().is_some()
         || motion.read().next().is_some()
         || wheel.read().next().is_some()
         || buttons.read().next().is_some();

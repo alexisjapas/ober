@@ -547,6 +547,7 @@ fn midi_sync(
     mut midi: ResMut<MidiRes>,
     mut mix: ResMut<MixState>,
     mut browser: ResMut<browser::Browser>,
+    mut activity: ResMut<power::ControlActivity>,
     load_tx: Res<LoadSender>,
 ) {
     while let Ok(status) = midi.status.try_recv() {
@@ -563,6 +564,9 @@ fn midi_sync(
     }
 
     while let Ok(event) = midi.events.try_recv() {
+        // Every controller event is an interaction: wake the UI from idle
+        // (specs §6.4/§6.5) — MIDI doesn't go through winit's inputs.
+        activity.mark();
         // Navigation bibliothèque au contrôleur (encodeur + boutons Load).
         match (event.action, event.value) {
             (mapping::Action::Load { deck }, ControlValue::Pressed(true)) => {

@@ -113,4 +113,7 @@ by ear without recompiling (the local file overrides the embedded copy).
 - [ ] Idle mode 10 fps after 5 s of inactivity (check with a frequency
       monitor), instant wake-up, audio thread unaffected; consumption
       measured on a laptop
+- [ ] Wake-up from idle by **every** input source: keyboard, mouse, and
+      each controller family — fader/knob, button, jog (decks paused; the
+      MIDI path bypasses winit, cf. `power::ControlActivity`)
 - [ ] F12 panel: consistent values, never shown by default
