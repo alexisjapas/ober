@@ -52,3 +52,74 @@ pub enum AnalysisFrame {
 pub trait Analyzer: Send {
     fn process(&mut self, block: &[f32]) -> Option<AnalysisFrame>;
 }
+
+/// Résumé mono-bande min/max/RMS d'une piste stéréo entrelacée (mix L+R),
+/// à `points_per_second` points. Fondation du rendu waveform (uploadé une
+/// fois en texture GPU, specs §6.1) ; la version 3 bandes filtrées arrive
+/// au M5.
+pub fn compute_overview(
+    samples_interleaved: &[f32],
+    sample_rate: u32,
+    points_per_second: u32,
+) -> Vec<WaveformPoint> {
+    let frames = samples_interleaved.len() / 2;
+    if frames == 0 || sample_rate == 0 || points_per_second == 0 {
+        return Vec::new();
+    }
+    let window = (sample_rate / points_per_second).max(1) as usize;
+    let mut points = Vec::with_capacity(frames / window + 1);
+    for chunk in samples_interleaved.chunks(window * 2) {
+        let mut point = WaveformPoint {
+            min: f32::MAX,
+            max: f32::MIN,
+            rms: 0.0,
+        };
+        let mut sum_sq = 0.0f64;
+        let n = (chunk.len() / 2).max(1);
+        for frame in chunk.chunks_exact(2) {
+            let mono = (frame[0] + frame[1]) * 0.5;
+            point.min = point.min.min(mono);
+            point.max = point.max.max(mono);
+            sum_sq += f64::from(mono * mono);
+        }
+        point.rms = (sum_sq / n as f64).sqrt() as f32;
+        points.push(point);
+    }
+    points
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_d_un_sinus() {
+        // 1 s de sinus 440 Hz d'amplitude 0,8 : chaque fenêtre de 48 samples
+        // (1000 pts/s) couvre ~0,44 période — les extrema globaux et le RMS
+        // global restent caractéristiques.
+        let mut samples = Vec::new();
+        for i in 0..48_000 {
+            let s = 0.8 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin();
+            samples.push(s);
+            samples.push(s);
+        }
+        let points = compute_overview(&samples, 48_000, 1_000);
+        assert_eq!(points.len(), 1_000);
+
+        let min = points.iter().fold(0.0f32, |m, p| m.min(p.min));
+        let max = points.iter().fold(0.0f32, |m, p| m.max(p.max));
+        assert!((min + 0.8).abs() < 0.01, "min = {min}");
+        assert!((max - 0.8).abs() < 0.01, "max = {max}");
+
+        let mean_rms = points.iter().map(|p| f64::from(p.rms)).sum::<f64>() / 1_000.0;
+        assert!(
+            (mean_rms - 0.8 / std::f64::consts::SQRT_2).abs() < 0.05,
+            "rms moyen = {mean_rms}"
+        );
+    }
+
+    #[test]
+    fn overview_vide() {
+        assert!(compute_overview(&[], 48_000, 1_000).is_empty());
+    }
+}

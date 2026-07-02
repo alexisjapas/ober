@@ -78,7 +78,7 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 - [x] Tests : table événement→action sur le mapping Hercules livré (toggle, momentary, NoteOff/vel 0, courbes dB aux butées, jogs relatifs, messages inconnus/tronqués), couche shift générique, encodages, routage chemin court (§7)
 - [x] Checklist manuelle contrôleur détaillée dans `TESTING.md` (§7)
 - [ ] **Validation matérielle sur le MK2** : chaque contrôle de la checklist TESTING.md, correction des codes RON si écart avec l'Inpulse 200 v1
-- [ ] **Spike parallèle (M3–M4)** : prototype waveform shader — texture min/max/RMS uploadée une fois, scroll/zoom par uniforms (dérisquage M6, §9)
+- [x] **Spike parallèle (M3–M4)** : prototype waveform shader (dérisquage M6, §9) — `Material2d` custom + WGSL embarqué, overview min/max/RMS (`analysis::compute_overview`, ~1000 pts/s) uploadée **une fois** en texture Rgba32Float (enroulée par lignes de 4096), scroll/zoom par uniforms, position affichée **extrapolée** (`pos + vitesse × Δt`, correction douce sans snap), 2 bandes A/B avec tête de lecture fixe au centre — aucune régénération de mesh. Restes M6 : mipmaps 1×/4×/16×, 3 bandes filtrées, beatgrid, zoom molette, `theme`
 
 **Sortie** : tous faders/potards/boutons opérants.
 

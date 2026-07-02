@@ -34,11 +34,16 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
+mod waveform;
+
 use bevy::prelude::*;
 use serde::Deserialize;
 
 use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, SAMPLE_RATE, TrackBuffer};
 use midi::{ControlEvent, ControlValue, MidiIo, MidiStatus};
+
+/// Résolution de l'overview waveform (specs §4.2 : ~1000 points/s).
+const OVERVIEW_POINTS_PER_SECOND: u32 = 1_000;
 
 const SEEK_STEP_SECONDS: u64 = 5;
 const VOLUME_PER_SECOND: f32 = 0.8;
@@ -64,6 +69,7 @@ fn main() {
             }),
             ..Default::default()
         }))
+        .add_plugins(waveform::WaveformPlugin)
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -113,10 +119,16 @@ impl AppConfig {
 #[derive(Resource)]
 struct AudioEngine(Mutex<Engine>);
 
+struct DecodedPayload {
+    track: decode::DecodedTrack,
+    /// Overview min/max/RMS calculée dans le worker (rendu waveform).
+    overview: Vec<analysis::WaveformPoint>,
+}
+
 struct DecodedMsg {
     deck: Deck,
     name: String,
-    result: Result<decode::DecodedTrack, decode::DecodeError>,
+    result: Result<DecodedPayload, decode::DecodeError>,
 }
 
 #[derive(Resource)]
@@ -124,10 +136,10 @@ struct DecodeInbox(Mutex<Receiver<DecodedMsg>>);
 
 struct LoadedTrack {
     name: String,
-    /// Clone de l'Arc envoyé au moteur, jamais lu au M1/M2 (le rendu
-    /// waveform M6 s'en servira) : garantit qu'un drop côté callback ne
-    /// désalloue jamais (cf. engine::track).
-    _buffer: Arc<TrackBuffer>,
+    /// Clone de l'Arc envoyé au moteur : garantit qu'un drop côté callback
+    /// ne désalloue jamais (cf. engine::track) ; sert aussi au rendu.
+    buffer: Arc<TrackBuffer>,
+    overview: Vec<analysis::WaveformPoint>,
 }
 
 #[derive(Resource, Default)]
@@ -253,7 +265,14 @@ fn setup(mut commands: Commands) {
                 let name = path
                     .file_name()
                     .map_or_else(|| path.display().to_string(), |n| n.display().to_string());
-                let result = decode::decode_file(&path);
+                let result = decode::decode_file(&path).map(|track| {
+                    let overview = analysis::compute_overview(
+                        &track.samples,
+                        decode::TARGET_SAMPLE_RATE,
+                        OVERVIEW_POINTS_PER_SECOND,
+                    );
+                    DecodedPayload { track, overview }
+                });
                 let _ = tx.send(DecodedMsg { deck, name, result });
             })
             .expect("spawn du thread de décodage");
@@ -295,14 +314,14 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
     let rx = inbox.0.lock().unwrap();
     while let Ok(msg) = rx.try_recv() {
         match msg.result {
-            Ok(track) => {
-                if track.truncated {
+            Ok(payload) => {
+                if payload.track.truncated {
                     warn!(
                         "« {} » : fichier tronqué, partie décodée conservée",
                         msg.name
                     );
                 }
-                let buffer = TrackBuffer::new(track.samples);
+                let buffer = TrackBuffer::new(payload.track.samples);
                 info!(
                     "deck {:?} : « {} » chargée ({:.1} s)",
                     msg.deck,
@@ -311,7 +330,8 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
                 );
                 decks.tracks[msg.deck.index()] = Some(LoadedTrack {
                     name: msg.name,
-                    _buffer: Arc::clone(&buffer),
+                    buffer: Arc::clone(&buffer),
+                    overview: payload.overview,
                 });
                 let mut eng = engine.0.lock().unwrap();
                 if eng
