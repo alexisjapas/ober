@@ -66,13 +66,16 @@ pub mod font {
 
 /// Single-screen proportions (specs §6.3). EVERYTHING is expressed in
 /// window fractions: the layout rearranges on resize. The two waveforms
-/// sit one above the other (A/B visual beat comparison), controls below.
+/// sit one above the other (A/B visual beat comparison), controls below,
+/// and the library is a permanent band on the bottom half — same layer as
+/// everything else, never an overlay.
 ///
 /// ```text
 /// header (deck texts)            HEADER_FRAC
 /// waveform A                     WAVE_HEIGHT_FRAC
 /// waveform B                     WAVE_HEIGHT_FRAC
-/// controls band                  (the rest)
+/// controls band                  CONTROLS_FRAC
+/// library (two panes)            (the rest)
 /// status bar                     STATUS_FRAC
 /// ```
 pub mod layout {
@@ -80,10 +83,12 @@ pub mod layout {
     pub const MARGIN: f32 = 16.0;
     /// Espacement standard entre éléments, px.
     pub const GAP: f32 = 8.0;
-    pub const HEADER_FRAC: f32 = 0.085;
-    pub const STATUS_FRAC: f32 = 0.055;
+    pub const HEADER_FRAC: f32 = 0.07;
+    pub const STATUS_FRAC: f32 = 0.05;
     /// Fraction de la hauteur occupée par chaque waveform.
-    pub const WAVE_HEIGHT_FRAC: f32 = 0.24;
+    pub const WAVE_HEIGHT_FRAC: f32 = 0.15;
+    /// Fraction de la hauteur occupée par la bande de contrôles.
+    pub const CONTROLS_FRAC: f32 = 0.15;
     /// Fraction de la largeur occupée par les waveforms.
     pub const WAVE_WIDTH_FRAC: f32 = 0.96;
     /// Largeur d'une barre de VU master, px.
@@ -98,9 +103,13 @@ pub mod layout {
         pub wave_center: [f32; 2],
         pub wave_height: f32,
         pub wave_width: f32,
-        /// Controls band below the waveforms, above the status bar.
+        /// Controls band below the waveforms.
         pub controls_center: f32,
         pub controls_height: f32,
+        /// Permanent library band: below the controls, above the status
+        /// bar — roughly the bottom half of the window.
+        pub browser_center: f32,
+        pub browser_height: f32,
     }
 
     pub fn bands(width: f32, height: f32) -> Bands {
@@ -108,13 +117,18 @@ pub mod layout {
         let wave_a = height * (0.5 - HEADER_FRAC) - wave_height * 0.5;
         let wave_b = wave_a - wave_height - GAP;
         let controls_top = wave_b - wave_height * 0.5 - GAP;
-        let controls_bottom = -(height * (0.5 - STATUS_FRAC));
+        let controls_height = (height * CONTROLS_FRAC).max(60.0);
+        let controls_bottom = controls_top - controls_height;
+        let browser_top = controls_bottom - GAP;
+        let browser_bottom = -(height * (0.5 - STATUS_FRAC));
         Bands {
             wave_center: [wave_a, wave_b],
             wave_height,
             wave_width: width * WAVE_WIDTH_FRAC,
             controls_center: (controls_top + controls_bottom) * 0.5,
-            controls_height: (controls_top - controls_bottom).max(60.0),
+            controls_height,
+            browser_center: (browser_top + browser_bottom) * 0.5,
+            browser_height: (browser_top - browser_bottom).max(100.0),
         }
     }
 }

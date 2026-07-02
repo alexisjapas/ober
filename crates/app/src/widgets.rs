@@ -421,8 +421,9 @@ fn interact(
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
     mut grab: ResMut<PointerGrab>,
-    mut browser: ResMut<Browser>,
+    browser: Res<Browser>,
     browser_view: Res<crate::browser::BrowserView>,
+    load_tx: Res<crate::LoadSender>,
 ) {
     use mapping::Action as A;
     use midi::ControlValue as V;
@@ -435,8 +436,8 @@ fn interact(
         cursor.x - window.width() * 0.5,
         window.height() * 0.5 - cursor.y,
     );
-    // Les clics dans la bibliothèque ouverte lui appartiennent.
-    if browser.open && browser_view.contains(point) && mouse.just_pressed(MouseButton::Left) {
+    // Les clics dans la bibliothèque (bande permanente) lui appartiennent.
+    if browser_view.contains(point) && mouse.just_pressed(MouseButton::Left) {
         return;
     }
     let deck = |i: usize| {
@@ -483,7 +484,16 @@ fn interact(
                             V::Toggled(!cue),
                         );
                     }
-                    ButtonKind::Load(_) => browser.open = true,
+                    // La bibliothèque est toujours visible : Load charge
+                    // directement sa sélection sur le deck.
+                    ButtonKind::Load(i) => {
+                        let deck = if i == 0 {
+                            engine::Deck::A
+                        } else {
+                            engine::Deck::B
+                        };
+                        browser.load_selected(deck, &load_tx);
+                    }
                 }
             }
             Some(Widget::Slider(kind)) => grab.slider = Some(kind),

@@ -12,7 +12,7 @@ members = [
 [workspace.package]
 # Semver of the shipped artifact (CONSTITUTION-DEV Rule 11). The `-dev` suffix
 # marks a line that never shipped; it drops at the first release.
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Conventional Rust-ecosystem dual license, matching the dependencies. Mixxx
 # stays a read-only reference (MIDI codes are facts about the hardware); never

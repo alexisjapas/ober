@@ -1,20 +1,22 @@
 //! Integrated library in **native Bevy** (design-system quads + Text2d):
-//! a two-pane panel over the bottom half of the screen — folders on the
-//! left, audio files of the *selected* folder on the right with metadata
-//! columns (title, artist, BPM, duration — tags read by a background
-//! header probe, `decode::probe_info`, never on the UI thread).
+//! a **permanent band** of the single screen (`theme::layout::bands()`) —
+//! same layer as the waveforms and controls, always visible, never an
+//! overlay. Two panes: folders on the left, audio files of the *selected*
+//! folder on the right with metadata columns (title, artist, BPM,
+//! duration — tags read by a background header probe,
+//! `decode::probe_info`, never on the UI thread).
 //!
 //! Same intents on every input (specs §6.4):
 //!
 //! - **controller**: BROWSER encoder = file list, Shift + encoder = folder
 //!   list (selecting a folder instantly previews its files), push = enter
-//!   the selected folder, Load buttons = load the selection (library
-//!   closed: open it);
-//! - **keyboard** (modal while open, the controller stays live):
-//!   `↑`/`↓` files, `Shift+↑`/`↓` folders, `Entrée`/`→` enter,
-//!   `←`/`Retour` parent, `F`/`L` load onto A/B, `B`/`Échap` close;
-//! - **mouse**: click = select (folder pane: re-click = enter), wheel
-//!   over a pane = scroll it, « → A »/« → B » buttons = load.
+//!   the selected folder, Load buttons = load the selection;
+//! - **keyboard**: `B` toggles the keyboard *focus* (focused, the deck
+//!   shortcuts pause): `↑`/`↓` files, `Shift+↑`/`↓` folders, `Entrée`/`→`
+//!   enter, `←`/`Retour` parent, `Échap` unfocus. `F`/`L` load onto A/B
+//!   whatever the focus;
+//! - **mouse**: click = select and focus (folder pane: re-click = enter),
+//!   wheel over a pane = scroll it, « → A »/« → B » buttons = load.
 //!
 //! The folder list starts with a synthetic ".." row (parent) then the
 //! current folder itself — everything stays reachable with the encoder
@@ -64,7 +66,9 @@ pub struct Entry {
 
 #[derive(Resource)]
 pub struct Browser {
-    pub open: bool,
+    /// Keyboard focus only — the panel itself is always visible. While
+    /// focused, the deck keyboard shortcuts pause (`B` toggles).
+    pub focused: bool,
     /// Current directory: its children fill the folder pane.
     dir: PathBuf,
     /// Folder pane rows: "..", the current folder itself, then subfolders.
@@ -95,7 +99,7 @@ impl Default for Browser {
             .unwrap_or(home);
         let (probe_tx, probe_results) = spawn_probe_worker();
         Self {
-            open: true,
+            focused: false,
             dir,
             dirs: Vec::new(),
             files: Vec::new(),
@@ -447,26 +451,30 @@ fn spawn_browser(
     }
 }
 
-/// Clavier — modal quand la bibliothèque est ouverte (le contrôleur MIDI,
-/// lui, reste pleinement actif sur les decks). Même sémantique que
-/// l'encodeur : base = fichiers, Shift = dossiers, Entrée = entrer.
+/// Clavier. `B` bascule le focus (la bibliothèque est toujours visible ;
+/// focalisée, les raccourcis decks sont en pause) ; `F`/`L` chargent la
+/// sélection quel que soit le focus. Même sémantique que l'encodeur :
+/// base = fichiers, Shift = dossiers, Entrée = entrer.
 fn keys_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<Browser>,
     load_tx: Res<LoadSender>,
 ) {
     if keys.just_pressed(KeyCode::KeyB) {
-        browser.open = !browser.open;
+        browser.focused = !browser.focused;
         return;
     }
-    if !browser.open {
-        if keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyL) {
-            browser.open = true;
-        }
+    if keys.just_pressed(KeyCode::KeyF) {
+        browser.load_selected(Deck::A, &load_tx);
+    }
+    if keys.just_pressed(KeyCode::KeyL) {
+        browser.load_selected(Deck::B, &load_tx);
+    }
+    if !browser.focused {
         return;
     }
     if keys.just_pressed(KeyCode::Escape) {
-        browser.open = false;
+        browser.focused = false;
     }
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if keys.just_pressed(KeyCode::ArrowUp) {
@@ -489,12 +497,6 @@ fn keys_input(
     if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::Backspace) {
         browser.go_parent();
     }
-    if keys.just_pressed(KeyCode::KeyF) {
-        browser.load_selected(Deck::A, &load_tx);
-    }
-    if keys.just_pressed(KeyCode::KeyL) {
-        browser.load_selected(Deck::B, &load_tx);
-    }
 }
 
 fn mouse_input(
@@ -506,10 +508,6 @@ fn mouse_input(
     parts: Query<(&Transform, &Part)>,
     load_tx: Res<LoadSender>,
 ) {
-    if !browser.open {
-        wheel.clear();
-        return;
-    }
     let Ok(window) = windows.single() else { return };
     let Some(cursor) = window.cursor_position() else {
         return;
@@ -521,6 +519,10 @@ fn mouse_input(
     if !view.contains(point) {
         wheel.clear();
         return;
+    }
+    if mouse.just_pressed(MouseButton::Left) {
+        // Un clic dans la bibliothèque lui donne aussi le focus clavier.
+        browser.focused = true;
     }
 
     let in_folder_pane = point.x < view.split_x();
@@ -608,32 +610,38 @@ fn render(
         browser.file_scroll = browser.file_selected + 1 - visible;
     }
 
-    let shown = if browser.open {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
+    // Toujours visible (bande permanente du layout) : seules les lignes
+    // au-delà des listes sont masquées.
     for (mut visibility, _) in &mut chrome {
-        *visibility = shown;
+        *visibility = Visibility::Inherited;
     }
 
     for (mut text, mut text_color, mut visibility, part) in &mut texts {
         match *part {
             Part::Title => {
-                *visibility = shown;
-                if browser.open {
-                    text.0 = format!(
-                        "Bibliothèque — {}  ({}/{})",
-                        browser.dir.display(),
-                        (browser.file_selected + 1).min(browser.files.len()),
-                        browser.files.len()
-                    );
+                *visibility = Visibility::Inherited;
+                text.0 = format!(
+                    "Bibliothèque — {}  ({}/{})",
+                    browser.dir.display(),
+                    (browser.file_selected + 1).min(browser.files.len()),
+                    browser.files.len()
+                );
+            }
+            Part::Hint => {
+                *visibility = Visibility::Inherited;
+                let hint = if browser.focused {
+                    "↑↓ fichiers   Maj+↑↓ dossiers   Entrée entrer   ← parent   F/L → deck   Échap decks"
+                } else {
+                    "B : clavier vers la bibliothèque   F/L → deck"
+                };
+                if text.0 != hint {
+                    text.0 = hint.into();
                 }
             }
             Part::DirRow(index) => {
                 let i = browser.dir_scroll + index;
                 let entry = browser.dirs.get(i);
-                let visible_row = browser.open && index < visible && entry.is_some();
+                let visible_row = index < visible && entry.is_some();
                 *visibility = if visible_row {
                     Visibility::Inherited
                 } else {
@@ -658,7 +666,7 @@ fn render(
             Part::FileCell { row, col } => {
                 let i = browser.file_scroll + row;
                 let entry = browser.files.get(i);
-                let visible_row = browser.open && row < visible && entry.is_some();
+                let visible_row = row < visible && entry.is_some();
                 *visibility = if visible_row {
                     Visibility::Inherited
                 } else {
@@ -692,12 +700,13 @@ fn render(
                     };
                 }
             }
-            _ => *visibility = shown,
+            _ => *visibility = Visibility::Inherited,
         }
     }
 }
 
-/// Géométrie du panneau (moitié basse de l'écran) et placement des entités.
+/// Géométrie du panneau (bande permanente `theme::layout::bands()`) et
+/// placement des entités — même calque que le reste de l'écran.
 fn place(
     windows: Query<&Window>,
     browser: Res<Browser>,
@@ -706,12 +715,10 @@ fn place(
 ) {
     let Ok(window) = windows.single() else { return };
     let (w, h) = (window.width(), window.height());
-    // Bottom half: from just under the screen middle down to the margin.
-    let top = -layout::GAP;
-    let bottom = -h * 0.5 + layout::MARGIN;
+    let bands = layout::bands(w, h);
     let width = w - 2.0 * layout::MARGIN;
-    let height = (top - bottom).max(120.0);
-    let center = Vec2::new(0.0, (top + bottom) * 0.5);
+    let height = bands.browser_height;
+    let center = Vec2::new(0.0, bands.browser_center);
     let left_width = (width * 0.26).clamp(200.0, 380.0);
 
     let list_top = height * 0.5 - 56.0;

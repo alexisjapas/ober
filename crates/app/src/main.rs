@@ -34,14 +34,16 @@
 //! | `R` / `P`               | remise à zéro du pitch A / B        |
 //! | `N` `M`                 | mix casque cue ↔ master             |
 //! | `J` `K`                 | gain casque − / +                   |
-//! | `B` (ou `F`/`L`)        | bibliothèque intégrée (Bevy natif)  |
+//! | `B`                     | focus clavier ↔ bibliothèque        |
+//! | `F` / `L`               | charge la sélection sur A / B       |
 //! | `F12`                   | panneau préférences/diagnostics     |
 //! | molette                 | zoom des waveforms                  |
 //!
-//! Bibliothèque ouverte, le clavier lui est dédié (`↑`/`↓` naviguer, `→`
-//! entrer, `←` parent, `F`/`L` charger sur A/B, `B`/`Échap` fermer) — le
-//! contrôleur reste actif sur les decks, et son encodeur BROWSER + ses
-//! boutons Load pilotent la bibliothèque.
+//! La bibliothèque est une **bande permanente** de l'écran (deux panneaux,
+//! dossiers/fichiers). `B` lui donne le clavier (`↑`/`↓` fichiers,
+//! `Maj+↑`/`↓` dossiers, `→`/`Entrée` entrer, `←` parent, `Échap` rend le
+//! clavier aux decks) ; le contrôleur la pilote en permanence (encodeur
+//! BROWSER, Shift+encodeur, poussoir, boutons Load).
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -881,24 +883,18 @@ fn midi_sync(
         // (specs §6.4/§6.5) — MIDI doesn't go through winit's inputs.
         activity.mark();
         // Navigation bibliothèque au contrôleur (encodeur + boutons Load).
+        // La bibliothèque est une bande permanente : Load charge toujours
+        // la sélection, l'encodeur défile toujours.
         match (event.action, event.value) {
             (mapping::Action::Load { deck }, ControlValue::Pressed(true)) => {
-                if browser.open {
-                    let deck = match deck {
-                        mapping::Deck::A => Deck::A,
-                        mapping::Deck::B => Deck::B,
-                    };
-                    browser.load_selected(deck, &load_tx);
-                } else {
-                    browser.open = true;
-                }
+                let deck = match deck {
+                    mapping::Deck::A => Deck::A,
+                    mapping::Deck::B => Deck::B,
+                };
+                browser.load_selected(deck, &load_tx);
             }
-            (mapping::Action::LibraryScroll, ControlValue::Relative(n)) => {
-                browser.open = true;
-                browser.scroll_by(n);
-            }
+            (mapping::Action::LibraryScroll, ControlValue::Relative(n)) => browser.scroll_by(n),
             (mapping::Action::LibraryFolderScroll, ControlValue::Relative(n)) => {
-                browser.open = true;
                 browser.scroll_dirs_by(n);
             }
             (mapping::Action::LibraryEnter, ControlValue::Pressed(true)) => browser.enter(),
@@ -922,9 +918,9 @@ fn keyboard_controls(
     use mapping::{Action, Deck as MDeck};
     use midi::ControlValue as V;
 
-    // Bibliothèque ouverte : le clavier lui est dédié (navigation modale
-    // gérée par browser::keys_input) — le contrôleur MIDI reste actif.
-    if browser.open {
+    // Bibliothèque focalisée : le clavier lui est dédié (navigation gérée
+    // par browser::keys_input) — le contrôleur MIDI reste actif.
+    if browser.focused {
         return;
     }
 

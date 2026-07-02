@@ -193,16 +193,15 @@ fn points_image(points: &[[f32; 4]]) -> Image {
 }
 
 /// Zoom à la molette : niveaux mipmap 1×/4×/16× côté texture (specs §6.3).
-/// La molette au-dessus de la bibliothèque ouverte lui appartient.
+/// La molette au-dessus de la bibliothèque (bande permanente) lui
+/// appartient.
 fn zoom_input(
     windows: Query<&Window>,
     mut wheel: MessageReader<MouseWheel>,
     mut zoom: ResMut<WaveZoom>,
-    browser: Res<crate::browser::Browser>,
     view: Res<crate::browser::BrowserView>,
 ) {
-    if browser.open
-        && let Ok(window) = windows.single()
+    if let Ok(window) = windows.single()
         && let Some(cursor) = window.cursor_position()
     {
         let point = Vec2::new(
