@@ -1,5 +1,5 @@
 {
-  description = "ober — logiciel de mix DJ open-source (Rust + Bevy), POC Hercules DJControl Inpulse 200 MK2";
+  description = "ober — open-source DJ mixing software (Rust + Bevy), Hercules DJControl Inpulse 200 MK2 POC";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -26,13 +26,13 @@
         };
         inherit (pkgs) lib stdenv;
 
-        # Toolchain stable pilotée par rust-toolchain.toml (source unique de vérité,
-        # partagée avec les utilisateurs rustup). Reproductible via flake.lock.
+        # Stable toolchain driven by rust-toolchain.toml (single source of truth,
+        # shared with rustup users). Reproducible through flake.lock.
         toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
-        # Bibliothèques système nécessaires à la compilation et au runtime :
-        # cpal/midir (ALSA — PipeWire fonctionne via la couche ALSA, specs §3.2),
-        # Bevy/wgpu/winit (Vulkan, Wayland + fallback X11, libxkbcommon, udev).
+        # System libraries needed at build time and at runtime:
+        # cpal/midir (ALSA — PipeWire works through its ALSA layer, specs §3.2),
+        # Bevy/wgpu/winit (Vulkan, Wayland + X11 fallback, libxkbcommon, udev).
         runtimeLibs = lib.optionals stdenv.isLinux (
           with pkgs;
           [
@@ -55,21 +55,27 @@
             pkgs.pkg-config
           ];
 
-          # Sous macOS, les frameworks système (CoreAudio, CoreMIDI, Metal…)
-          # sont fournis automatiquement par le SDK du stdenv nixpkgs.
+          # On macOS the system frameworks (CoreAudio, CoreMIDI, Metal…) are
+          # provided automatically by the nixpkgs stdenv SDK.
           buildInputs = runtimeLibs;
 
-          packages = lib.optionals stdenv.isLinux (
-            with pkgs;
+          packages =
             [
-              # aseqdump : rétro-ingénierie MIDI du contrôleur (specs §5.3),
-              # en complément de notre outil `midi-probe`.
-              alsa-utils
+              # Third-party license notices (about.toml) — same tool and version
+              # family as the release CI, for local runs of `cargo about generate`.
+              pkgs.cargo-about
             ]
-          );
+            ++ lib.optionals stdenv.isLinux (
+              with pkgs;
+              [
+                # aseqdump: MIDI reverse-engineering of the controller (specs §5.3),
+                # complementing our own `midi-probe` tool.
+                alsa-utils
+              ]
+            );
 
-          # wgpu/winit chargent vulkan-loader, wayland et libxkbcommon
-          # dynamiquement à l'exécution (dlopen) : elles doivent être visibles.
+          # wgpu/winit dlopen vulkan-loader, wayland and libxkbcommon at runtime:
+          # they must be visible on the library path.
           LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
         };
       }

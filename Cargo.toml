@@ -10,15 +10,17 @@ members = [
 ]
 
 [workspace.package]
+# Semver of the shipped artifact (CONSTITUTION-DEV Rule 11). The `-dev` suffix
+# marks a line that never shipped; it drops at the first release.
 version = "0.1.0-dev"
 edition = "2024"
-# À confirmer avant première publication (specs — licence, compat mappings Mixxx).
+# To be confirmed before first publication (specs — license, Mixxx mapping compat).
 license = "GPL-3.0-or-later"
 
-# Registre unique des versions du workspace. Chaque crate référence ces entrées
-# avec `dep.workspace = true` au jalon qui en a besoin.
+# Single version registry for the workspace. Each crate references these entries
+# with `dep.workspace = true` at the milestone that needs them.
 [workspace.dependencies]
-# --- crates internes ---
+# --- internal crates ---
 engine = { path = "crates/engine" }
 decode = { path = "crates/decode" }
 analysis = { path = "crates/analysis" }
@@ -30,9 +32,9 @@ cpal = "0.18.1"
 symphonia = { version = "0.6.0", features = ["all"] }
 rubato = "3.0.0"
 rustfft = "6.4.1"
-biquad = "0.6.0"                                      # M2 (ou implémentation RBJ maison)
+biquad = "0.6.0"                                      # M2 (or an in-house RBJ implementation)
 
-# --- temps réel / inter-threads (specs §2.3) ---
+# --- real time / inter-thread (specs §2.3) ---
 rtrb = "0.3.4"
 triple_buffer = "9.0.0"
 crossbeam-channel = "0.5.15"
@@ -41,32 +43,32 @@ assert_no_alloc = "1.1.2"
 # --- MIDI ---
 midir = "0.11.0"
 
-# --- sérialisation / mapping ---
+# --- serialization / mapping ---
 serde = { version = "1.0.228", features = ["derive"] }
 ron = "0.12.2"
 
-# --- UI : réservé à la crate `app`, frontière vérifiée en CI (specs §1.4) ---
-# ÉPINGLAGE EXACT de Bevy : les migrations de version sont des tâches
-# planifiées (~1×/an), jamais subies.
+# --- UI: reserved to the `app` crate, boundary enforced in CI (specs §1.4) ---
+# Bevy is pinned to an EXACT version: migrations are planned tasks (~1×/year),
+# never done in passing (CONSTITUTION-DEV Rule 4).
 bevy = "=0.19.0"
-bevy_egui = "0.41.0"                                  # compatible bevy 0.19 (vérifié)
-# xdg-portal (pas de dépendance GTK) : dialogue natif via le portail desktop.
+bevy_egui = "0.41.0"                                  # compatible with bevy 0.19 (verified)
+# xdg-portal (no GTK dependency): native dialog through the desktop portal.
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
-# --- divers ---
+# --- misc ---
 thiserror = "2.0.18"
 anyhow = "1.0.103"
 
 # --- dev / bench ---
 criterion = "0.8.2"
-hound = "3.5.1"     # lecture/écriture WAV dans les tests uniquement
+hound = "3.5.1"     # WAV read/write in tests only
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 
-# Dépendances (dont tout le DSP) optimisées même en dev : indispensable pour
-# tenir le budget temps réel audio en debug. Taille du binaire et temps de
-# compilation explicitement non prioritaires (specs — priorités produit).
+# Dependencies (all the DSP included) optimized even in dev: required to hold the
+# real-time audio budget in debug builds. Binary size and compile time are
+# explicitly non-priorities (specs — product priorities).
 [profile.dev]
 opt-level = 1
 
@@ -75,3 +77,27 @@ opt-level = 3
 
 [profile.release]
 lto = "thin"
+
+# Distribution profile — what the release CI (`.github/workflows/release.yml`)
+# builds. Tuned for maximum *runtime* performance (the audio callback budget is
+# the product priority), at the cost of slow link times. Kept separate from
+# `release` on purpose: local `cargo build --release` stays quick to link, while
+# only the tagged release pays for fat LTO + a single codegen unit. The portable
+# CPU floor (x86-64-v3 on x86_64) is set via RUSTFLAGS in the workflow, not here,
+# so it never leaks into a developer's native build.
+[profile.dist]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Profiling profile — an optimized build (like `release`) but WITH debug symbols
+# and no stripping, so `cargo flamegraph --profile profiling` / `perf` produce
+# readable stacks. Distinct from `dist` (which strips and aborts on panic) and
+# from `release` (no debug info).
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

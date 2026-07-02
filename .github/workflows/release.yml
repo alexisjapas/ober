@@ -1,0 +1,206 @@
+# Release build & publish.
+#
+# Trigger: pushing a v-prefixed semver tag (e.g. `v0.1.0`). Per CONSTITUTION-DEV
+# Rule 11, a tag is cut on explicit request (any version, a patch included) or to
+# capture the outgoing version before a minor/major bump; the tag must equal the
+# `Cargo.toml` workspace version — `version-check` below fails the run otherwise.
+# The trigger pattern cannot match a pre-release, so the current `0.1.0-dev` line
+# is mechanically unreleasable until the suffix drops.
+#
+# Each platform builds the `ober` binary with the `dist` profile (fat LTO,
+# codegen-units = 1 — see Cargo.toml) for maximum runtime performance, then
+# archives it together with the on-disk data the app reads at launch (mappings/,
+# ober.config.example.ron). A final job attaches the three archives to a single
+# GitHub Release for the tag.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# `bash` everywhere — including the Windows runner (Git Bash) — so one staging
+# script serves all three platforms.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Guards: the GitHub tag must follow the Cargo.toml version, and a release
+  # cannot ship without a license (Rule 11 — the license is a pending decision,
+  # cf. ROADMAP "Next actions").
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag must match Cargo.toml version
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Cargo.toml = $version   tag = $GITHUB_REF_NAME"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version (CONSTITUTION-DEV Rule 11)"
+            exit 1
+          fi
+      - name: A release must ship a LICENSE
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "::error::No LICENSE file — confirm the license before the first release (CONSTITUTION-DEV Rule 11, ROADMAP M0)"
+            exit 1
+          fi
+
+  # Generate THIRD-PARTY-LICENSES.html — the bundle of dependency license notices
+  # shipped in every archive (the permissive licenses require the copyright notices
+  # to travel with the binaries). `cargo about` reads about.toml: a dependency whose
+  # license is not in its `accepted` allow-list FAILS this job — a tripwire against
+  # an unvetted license sneaking into the tree on a future bump.
+  licenses:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.0
+      - name: Generate third-party license notices
+        run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: third-party-licenses
+          path: THIRD-PARTY-LICENSES.html
+          if-no-files-found: error
+
+  build:
+    needs: [version-check, licenses]
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86_64 floor = x86-64-v3 (AVX2/FMA/BMI, ~2013+ CPUs): strong runtime
+          # perf for the DSP while still running on virtually every machine from
+          # the last decade. `target-cpu=native` is deliberately NOT used — it
+          # would tie the binary to the runner's CPU and fault on users' hardware.
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+            rustflags: "-C target-cpu=x86-64-v3"
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            rustflags: "-C target-cpu=x86-64-v3"
+          # macOS is Apple Silicon only; the aarch64-apple-darwin default CPU
+          # baseline already targets Apple Silicon, so no extra RUSTFLAGS.
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar
+            rustflags: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # alsa (cpal/midir), udev (input enumeration), and the wayland feature's
+          # libwayland-client / libxkbcommon must be present at *build* time. The
+          # vulkan loader, X11, etc. are dlopen'd on the user's machine at runtime.
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Build ober (dist profile)
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          # Fat LTO (profile.dist) merges all of Bevy into one module and needs
+          # more RAM than the 7 GB macOS arm64 runner has — it OOM-thrashes and
+          # never links. Drop to thin LTO on macOS only (near-identical runtime
+          # perf, a fraction of the peak memory); Linux/Windows (16 GB) keep fat.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            export CARGO_PROFILE_DIST_LTO=thin
+          fi
+          cargo build --locked --profile dist --target ${{ matrix.target }} \
+            -p app --bin ober
+
+      - name: Fetch the third-party license notices
+        uses: actions/download-artifact@v7
+        with:
+          name: third-party-licenses
+          path: .
+
+      - name: Stage and archive the release
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          dist="ober-${version}-${{ matrix.name }}"
+          bin="target/${{ matrix.target }}/dist"
+          ext=""
+          [ "${{ matrix.archive }}" = "zip" ] && ext=".exe"
+
+          mkdir -p "$dist"
+          cp "$bin/ober$ext" "$dist/"
+          # Data the app reads from the working directory at launch: the
+          # controller mapping (the local RON overrides the embedded copy) and
+          # the runtime-config template. Shaders and fonts are embedded in the
+          # binary — nothing else to stage.
+          cp -r mappings README.md ober.config.example.ron "$dist/"
+          # License files: the project license + the notices of the embedded
+          # fonts (crates/app/src/fonts/) + the bundled notices of the statically
+          # linked dependencies (MIT/Apache require the notices to ship).
+          cp LICENSE THIRD-PARTY-LICENSES.html "$dist/"
+          cp crates/app/src/fonts/OFL-Inter.txt crates/app/src/fonts/LICENSE-Phosphor.txt "$dist/"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip "$dist.zip" "$dist" >/dev/null
+            echo "ASSET=$dist.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$dist.tar.gz" "$dist"
+            echo "ASSET=$dist.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release & upload assets
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # need the annotated tag object for its message
+      - name: Release notes from the annotated tag
+        run: |
+          # The annotated tag's message IS the changelog — a hand-written
+          # description of the evolutions since the previous tag (CONSTITUTION-DEV
+          # Rule 11). `append_body` below adds GitHub's auto "Full Changelog" link
+          # underneath it.
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          body_path: RELEASE_NOTES.md
+          append_body: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
