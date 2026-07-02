@@ -4,11 +4,14 @@
 //! (crate `midi`) est générique : il traduit `événement MIDI → Action` et
 //! `StateChange → message MIDI`. Aucun code spécifique à un contrôleur ici,
 //! aucune dépendance Bevy.
+//!
+//! Note de syntaxe RON : `Absolute` s'écrit `Absolute()` (courbe linéaire
+//! par défaut) ou `Absolute(curve: DbLinear(-26, 6))`.
 
 use serde::{Deserialize, Serialize};
 
 /// Identifiant de deck côté domaine/mapping. Converti vers `engine::Deck`
-/// par la crate `app` (les deux crates restent indépendantes).
+/// par les consommateurs (les deux crates restent indépendantes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Deck {
     A,
@@ -20,17 +23,45 @@ pub enum Deck {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Action {
-    Play { deck: Deck },
-    Cue { deck: Deck },
-    Volume { deck: Deck },
-    EqLow { deck: Deck },
-    EqMid { deck: Deck },
-    EqHigh { deck: Deck },
-    Pitch { deck: Deck },
-    HeadphoneCue { deck: Deck },
-    JogTick { deck: Deck },
-    JogTouch { deck: Deck },
-    Load { deck: Deck },
+    Play {
+        deck: Deck,
+    },
+    Cue {
+        deck: Deck,
+    },
+    Volume {
+        deck: Deck,
+    },
+    EqLow {
+        deck: Deck,
+    },
+    EqMid {
+        deck: Deck,
+    },
+    EqHigh {
+        deck: Deck,
+    },
+    Pitch {
+        deck: Deck,
+    },
+    HeadphoneCue {
+        deck: Deck,
+    },
+    /// Ticks relatifs du jog, surface touchée (scratch, M4).
+    JogTick {
+        deck: Deck,
+    },
+    /// Ticks relatifs du bord du jog, sans touch (pitch bend, M4).
+    JogBend {
+        deck: Deck,
+    },
+    /// Touch capacitif du jog (M4).
+    JogTouch {
+        deck: Deck,
+    },
+    Load {
+        deck: Deck,
+    },
     CrossFader,
     MasterGain,
     HeadphoneGain,
@@ -39,6 +70,7 @@ pub enum Action {
 }
 
 /// Événement MIDI d'entrée à matcher (canaux 0–15, données 0–127).
+/// Un binding `NoteOn` matche aussi le relâchement (NoteOff ou vélocité 0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InputSpec {
     NoteOn { ch: u8, note: u8 },
@@ -46,16 +78,92 @@ pub enum InputSpec {
     CC { ch: u8, cc: u8 },
 }
 
-/// Modes de base (M0). Le jalon M3 ajoute les courbes (`DbLinear`…) pour
-/// `Absolute` et les encodages (`SignedBit`…) pour `Relative`.
+impl InputSpec {
+    pub fn channel(&self) -> u8 {
+        match *self {
+            InputSpec::NoteOn { ch, .. }
+            | InputSpec::NoteOff { ch, .. }
+            | InputSpec::CC { ch, .. } => ch,
+        }
+    }
+
+    pub fn data1(&self) -> u8 {
+        match *self {
+            InputSpec::NoteOn { note, .. } | InputSpec::NoteOff { note, .. } => note,
+            InputSpec::CC { cc, .. } => cc,
+        }
+    }
+}
+
+/// Courbe appliquée à un contrôle absolu (0–127 normalisé en 0–1 d'abord).
+/// La sortie est une valeur du domaine de l'action : gain linéaire pour
+/// `Linear`, décibels pour `DbLinear` (consommés par ex. par l'EQ).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum Curve {
+    #[default]
+    Linear,
+    /// Interpolation linéaire en dB entre (min, max).
+    DbLinear(f32, f32),
+}
+
+impl Curve {
+    /// `t` ∈ [0, 1] → valeur du domaine.
+    pub fn apply(&self, t: f32) -> f32 {
+        match *self {
+            Curve::Linear => t,
+            Curve::DbLinear(min, max) => min + t * (max - min),
+        }
+    }
+}
+
+/// Encodage des contrôles relatifs 7 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelativeEncoding {
+    /// Signe-magnitude : bit 6 = signe. 0x01 = +1, 0x41 = −1.
+    SignedBit,
+    /// Complément à deux 7 bits : 0x01 = +1, 0x7F = −1 (jogs Hercules).
+    TwosComplement,
+}
+
+impl RelativeEncoding {
+    pub fn decode(&self, value: u8) -> i32 {
+        let value = i32::from(value & 0x7F);
+        match self {
+            RelativeEncoding::SignedBit => {
+                if value >= 0x40 {
+                    -(value - 0x40)
+                } else {
+                    value
+                }
+            }
+            RelativeEncoding::TwosComplement => {
+                if value >= 0x40 {
+                    value - 0x80
+                } else {
+                    value
+                }
+            }
+        }
+    }
+}
+
+/// Interprétation du contrôle (specs §5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Mode {
+    /// Chaque pression inverse un état tenu par le moteur de mapping.
     Toggle,
+    /// Pression/relâchement transmis tels quels (boutons cue…).
     Momentary,
+    /// Comme `Momentary`, pour les contrôles « tenus » (shift, jog touch).
     Gate,
-    Absolute,
-    Relative,
+    /// Contrôle continu 7 bits, courbe optionnelle.
+    Absolute {
+        #[serde(default)]
+        curve: Curve,
+    },
+    /// Ticks relatifs signés (jogs, encodeurs).
+    Relative { encoding: RelativeEncoding },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,12 +187,17 @@ pub struct JogConfig {
 }
 
 /// Mapping complet d'un contrôleur. Le schéma `feedback` (LEDs, VU) est
-/// conçu au jalon M5 — réserver les états dès maintenant côté specs §5.3.
+/// conçu au jalon M5 — les états sont déjà réservés côté specs §5.3.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mapping {
     pub name: String,
     /// Substrings matchés sur le nom du port MIDI (détection automatique).
     pub device_match: Vec<String>,
+    /// Messages MIDI bruts envoyés à la connexion (ex. activation du mode
+    /// « full MIDI » des LEDs Hercules). Le trait `ControllerBackend`
+    /// prendra le relais si un contrôleur exige plus (SysEx…).
+    #[serde(default)]
+    pub init: Vec<(u8, u8, u8)>,
     #[serde(default)]
     pub controls: Vec<ControlBinding>,
     pub jog: JogConfig,
@@ -105,10 +218,62 @@ impl std::str::FromStr for Mapping {
 }
 
 impl Mapping {
-    /// Validation sémantique — erreurs lisibles : contrôle dupliqué, canal
-    /// hors plage… (specs §5.2). Implémentation : jalon M3.
+    /// Vrai si `port_name` correspond à ce contrôleur.
+    pub fn matches_port(&self, port_name: &str) -> bool {
+        self.device_match.iter().any(|m| port_name.contains(m))
+    }
+
+    /// Validation sémantique, erreurs lisibles (specs §5.2). Retourne la
+    /// liste complète des problèmes plutôt que le premier rencontré.
     pub fn validate(&self) -> Result<(), Vec<String>> {
-        Ok(())
+        let mut errors = Vec::new();
+
+        if self.device_match.is_empty() {
+            errors.push("device_match vide : le contrôleur ne sera jamais détecté".into());
+        }
+        if self.jog.ticks_per_rev == 0 {
+            errors.push("jog.ticks_per_rev doit être > 0".into());
+        }
+
+        for (i, control) in self.controls.iter().enumerate() {
+            let ctx = format!("controls[{i}] ({:?})", control.action);
+            if control.input.channel() > 15 {
+                errors.push(format!(
+                    "{ctx} : canal {} hors plage 0–15",
+                    control.input.channel()
+                ));
+            }
+            if control.input.data1() > 127 {
+                errors.push(format!(
+                    "{ctx} : note/cc {} hors plage 0–127",
+                    control.input.data1()
+                ));
+            }
+            if let Mode::Absolute {
+                curve: Curve::DbLinear(min, max),
+            } = control.mode
+                && min >= max
+            {
+                errors.push(format!(
+                    "{ctx} : courbe DbLinear({min}, {max}) invalide (min ≥ max)"
+                ));
+            }
+
+            for (j, other) in self.controls.iter().enumerate().skip(i + 1) {
+                if control.input == other.input && control.shift == other.shift {
+                    errors.push(format!(
+                        "contrôle dupliqué : controls[{i}] et controls[{j}] partagent {:?} (shift: {})",
+                        control.input, control.shift
+                    ));
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -119,10 +284,52 @@ mod tests {
     const HERCULES: &str = include_str!("../../../mappings/hercules_inpulse_200_mk2.ron");
 
     #[test]
-    fn le_mapping_hercules_livre_est_parseable() {
+    fn le_mapping_hercules_livre_est_parseable_et_valide() {
         let m: Mapping = HERCULES.parse().expect("mapping RON invalide");
         assert_eq!(m.name, "Hercules DJControl Inpulse 200 MK2");
-        assert!(m.device_match.iter().any(|s| s.contains("DJControl")));
-        assert!(m.validate().is_ok());
+        assert!(m.matches_port("DJControl Inpulse 200 MK2 MIDI 1"));
+        assert!(!m.controls.is_empty());
+        assert!(!m.init.is_empty(), "message d'init LEDs attendu");
+        if let Err(errors) = m.validate() {
+            panic!("mapping invalide : {errors:#?}");
+        }
+    }
+
+    #[test]
+    fn les_doublons_et_hors_plage_sont_detectes() {
+        let mut m: Mapping = HERCULES.parse().unwrap();
+        let first = m.controls[0].clone();
+        m.controls.push(first);
+        m.controls.push(ControlBinding {
+            input: InputSpec::CC { ch: 42, cc: 200 },
+            shift: false,
+            action: Action::CrossFader,
+            mode: Mode::Absolute {
+                curve: Curve::default(),
+            },
+        });
+        let errors = m.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("dupliqué")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("canal 42")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("200")), "{errors:?}");
+    }
+
+    #[test]
+    fn courbes_et_encodages() {
+        assert_eq!(Curve::Linear.apply(0.5), 0.5);
+        let db = Curve::DbLinear(-26.0, 6.0);
+        assert_eq!(db.apply(0.0), -26.0);
+        assert_eq!(db.apply(1.0), 6.0);
+
+        let tc = RelativeEncoding::TwosComplement;
+        assert_eq!(tc.decode(0x01), 1);
+        assert_eq!(tc.decode(0x7F), -1);
+        assert_eq!(tc.decode(0x02), 2);
+        assert_eq!(tc.decode(0x7E), -2);
+
+        let sb = RelativeEncoding::SignedBit;
+        assert_eq!(sb.decode(0x01), 1);
+        assert_eq!(sb.decode(0x41), -1);
+        assert_eq!(sb.decode(0x43), -3);
     }
 }

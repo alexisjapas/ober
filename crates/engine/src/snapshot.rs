@@ -9,6 +9,8 @@ pub struct DeckSnapshot {
     pub cue: bool,
     /// Position de lecture dans la piste, en samples (48 kHz).
     pub position_samples: u64,
+    /// Point cue courant, en samples (0 par défaut).
+    pub cue_point_samples: u64,
     /// Longueur de la piste chargée, en samples (0 = pas de piste).
     pub track_frames: u64,
     /// Vitesse de lecture courante (1.0 = nominale, 0.0 = à l'arrêt). Sert à

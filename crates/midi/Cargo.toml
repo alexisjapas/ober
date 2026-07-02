@@ -9,6 +9,8 @@ description = "I/O MIDI (midir), moteur de mapping générique, feedback LED. Au
 midir.workspace = true
 crossbeam-channel.workspace = true
 mapping.workspace = true
+engine.workspace = true
+rtrb.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true # binaire midi-probe uniquement
 

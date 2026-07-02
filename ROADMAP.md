@@ -68,14 +68,16 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 
 ## M3 — MIDI in
 
-- [ ] Thread MIDI dédié (midir) ; hot-plug : détection connexion/déconnexion, reconnexion auto, jamais de crash au débranchement (§5.1)
-- [ ] **Chemin court** : jogs/faders/crossfader → commandes audio directes sans passer par le scheduler Bevy ; copie vers Bevy pour l'affichage (§5.1)
-- [ ] Compléter le schéma de mapping : courbes `Absolute(curve: DbLinear(…))`, encodages `Relative(encoding: SignedBit…)`, couche Shift (§5.2)
-- [ ] Moteur de mapping générique `InputSpec → Action` ; aucun code spécifique Hercules dans le moteur ; trait `ControllerBackend` si séquence d'init LEDs nécessaire (§5.2–5.3)
-- [ ] Validation du mapping au chargement : erreurs lisibles (doublons, canaux hors plage, action inconnue) (§5.2)
-- [ ] Remplir `mappings/hercules_inpulse_200_mk2.ron` hors jogs (sources : mapping Mixxx + `midi-probe` sur le matériel) (§5.3)
-- [ ] Tests : table exhaustive événement→action pour l'Inpulse, parsing RON (§7)
-- [ ] Créer la checklist manuelle contrôleur dans `TESTING.md` (§7)
+- [x] Thread MIDI dédié (midir) ; hot-plug par polling (~1,5 s) : déconnexion détectée, reconnexion auto, jamais de crash au débranchement ; état shift/toggles conservé entre connexions (§5.1)
+- [x] **Chemin court** : événement traduit → `EngineCommand` poussé dans un **ring SPSC dédié** du moteur, directement depuis le callback midir ; copie de chaque événement vers Bevy pour l'affichage (§5.1)
+- [x] Schéma de mapping complet : courbes (`Linear`, `DbLinear` — sortie en dB pour l'EQ), encodages relatifs (`SignedBit`, `TwosComplement`), couche Shift avec repli sur la couche de base, champ `init` (messages bruts à la connexion) (§5.2)
+- [x] Moteur de mapping générique `InputSpec → Action` (`midi::MappingEngine`) — aucun code Hercules dans le moteur ; l'init LEDs passe par le champ déclaratif `init` (le trait `ControllerBackend` attendra un contrôleur qui exige du SysEx) (§5.2–5.3)
+- [x] Validation au chargement, erreurs lisibles cumulées : doublons (input, shift), canaux/notes hors plage, courbes invalides, `device_match` vide (§5.2)
+- [x] `mappings/hercules_inpulse_200_mk2.ron` rempli depuis le mapping Mixxx de l'Inpulse 200 : transport, cue, PFL, load, crossfader, volumes, EQ 2 bandes (pas de médium sur ce contrôleur), pitch (MSB), jogs déclarés (exploités au M4), init `0xB0 0x7F 0x7F` — **codes à confirmer sur le MK2 avec midi-probe** (§5.3)
+- [x] Cue point à sémantique vinyle dans le moteur (`CuePress`/`CueRelease` : pose/retour/pré-écoute tenue) + tests offline
+- [x] Tests : table événement→action sur le mapping Hercules livré (toggle, momentary, NoteOff/vel 0, courbes dB aux butées, jogs relatifs, messages inconnus/tronqués), couche shift générique, encodages, routage chemin court (§7)
+- [x] Checklist manuelle contrôleur détaillée dans `TESTING.md` (§7)
+- [ ] **Validation matérielle sur le MK2** : chaque contrôle de la checklist TESTING.md, correction des codes RON si écart avec l'Inpulse 200 v1
 - [ ] **Spike parallèle (M3–M4)** : prototype waveform shader — texture min/max/RMS uploadée une fois, scroll/zoom par uniforms (dérisquage M6, §9)
 
 **Sortie** : tous faders/potards/boutons opérants.

@@ -38,6 +38,7 @@ use bevy::prelude::*;
 use serde::Deserialize;
 
 use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, SAMPLE_RATE, TrackBuffer};
+use midi::{ControlEvent, ControlValue, MidiIo, MidiStatus};
 
 const SEEK_STEP_SECONDS: u64 = 5;
 const VOLUME_PER_SECOND: f32 = 0.8;
@@ -50,6 +51,9 @@ const CUE_MIX_PER_SECOND: f32 = 0.8;
 const HEADPHONE_PER_SECOND: f32 = 0.8;
 
 const CONFIG_PATH: &str = "ober.config.ron";
+const MAPPING_PATH: &str = "mappings/hercules_inpulse_200_mk2.ron";
+/// Mapping par défaut embarqué (surchargé par le fichier s'il est présent).
+const DEFAULT_MAPPING: &str = include_str!("../../../mappings/hercules_inpulse_200_mk2.ron");
 
 fn main() {
     App::new()
@@ -63,7 +67,14 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (poll_decoded, keyboard_controls, drain_engine, update_status).chain(),
+            (
+                poll_decoded,
+                midi_sync,
+                keyboard_controls,
+                drain_engine,
+                update_status,
+            )
+                .chain(),
         )
         .run();
 }
@@ -156,13 +167,51 @@ impl Default for MixState {
 #[derive(Resource, Default)]
 struct LastSnapshot(EngineSnapshot);
 
+/// Sous-système MIDI : poignée du thread I/O + canaux de copie UI (§5.1).
+#[derive(Resource)]
+struct MidiRes {
+    /// Maintient le thread MIDI en vie (drop = arrêt propre).
+    _io: Option<MidiIo>,
+    events: crossbeam_channel::Receiver<ControlEvent>,
+    status: crossbeam_channel::Receiver<MidiStatus>,
+    controller: Option<String>,
+}
+
+/// Charge le mapping contrôleur : fichier local prioritaire (itération sans
+/// recompiler), sinon la copie embarquée. Valide avant usage (specs §5.2).
+fn load_mapping() -> Option<mapping::Mapping> {
+    let (source, text) = match std::fs::read_to_string(MAPPING_PATH) {
+        Ok(text) => (MAPPING_PATH, text),
+        Err(_) => ("mapping embarqué", DEFAULT_MAPPING.to_owned()),
+    };
+    let parsed: Result<mapping::Mapping, _> = text.parse();
+    match parsed {
+        Ok(mapping) => match mapping.validate() {
+            Ok(()) => {
+                info!("mapping « {} » chargé ({source})", mapping.name);
+                Some(mapping)
+            }
+            Err(errors) => {
+                for e in errors {
+                    error!("mapping invalide : {e}");
+                }
+                None
+            }
+        },
+        Err(e) => {
+            error!("mapping illisible ({source}) : {e}");
+            None
+        }
+    }
+}
+
 fn setup(mut commands: Commands) {
     let config = AppConfig::load();
     let engine_config = EngineConfig {
         device_match: config.device_match,
         buffer_frames: config.buffer_frames.unwrap_or(engine::TARGET_BUFFER_FRAMES),
     };
-    let engine = Engine::start(engine_config).unwrap_or_else(|e| {
+    let mut engine = Engine::start(engine_config).unwrap_or_else(|e| {
         panic!("impossible de démarrer le moteur audio : {e}");
     });
     info!(
@@ -209,6 +258,24 @@ fn setup(mut commands: Commands) {
             })
             .expect("spawn du thread de décodage");
     }
+
+    // Thread MIDI : chemin court vers le moteur (ring SPSC dédié) + copie
+    // des événements vers l'UI. Sans mapping valide, l'app reste utilisable
+    // au clavier.
+    let (midi_events_tx, midi_events_rx) = crossbeam_channel::unbounded();
+    let (midi_status_tx, midi_status_rx) = crossbeam_channel::unbounded();
+    let midi_io = load_mapping().and_then(|mapping| {
+        let producer = engine.ports.midi_commands.take()?;
+        MidiIo::spawn(mapping, producer, midi_events_tx, midi_status_tx)
+            .inspect_err(|e| error!("thread MIDI : {e}"))
+            .ok()
+    });
+    commands.insert_resource(MidiRes {
+        _io: midi_io,
+        events: midi_events_rx,
+        status: midi_status_rx,
+        controller: None,
+    });
 
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
     commands.insert_resource(DecodeInbox(Mutex::new(rx)));
@@ -264,9 +331,49 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
     }
 }
 
+/// Copie UI du flux MIDI (specs §5.1) : le chemin court a déjà envoyé les
+/// commandes au moteur depuis le thread MIDI ; ici on ne fait que refléter
+/// les valeurs dans l'état d'affichage et traiter les actions purement UI.
+fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>) {
+    while let Ok(status) = midi.status.try_recv() {
+        match status {
+            MidiStatus::Connected(name) => {
+                info!("contrôleur MIDI connecté : {name}");
+                midi.controller = Some(name);
+            }
+            MidiStatus::Disconnected => {
+                warn!("contrôleur MIDI débranché — reconnexion automatique en attente");
+                midi.controller = None;
+            }
+        }
+    }
+
+    while let Ok(event) = midi.events.try_recv() {
+        use mapping::Action as A;
+        let idx = |d: mapping::Deck| match d {
+            mapping::Deck::A => 0usize,
+            mapping::Deck::B => 1,
+        };
+        match (event.action, event.value) {
+            (A::Volume { deck }, ControlValue::Absolute(v)) => mix.volumes[idx(deck)] = v,
+            (A::CrossFader, ControlValue::Absolute(v)) => mix.crossfader = v * 2.0 - 1.0,
+            (A::Pitch { deck }, ControlValue::Absolute(v)) => {
+                mix.pitch[idx(deck)] = (v * 2.0 - 1.0) * PITCH_RANGE;
+            }
+            (A::HeadphoneCue { deck }, ControlValue::Toggled(on)) => mix.cue[idx(deck)] = on,
+            (A::MasterGain, ControlValue::Absolute(v)) => mix.master = v,
+            (A::CueMix, ControlValue::Absolute(v)) => mix.cue_mix = v,
+            (A::HeadphoneGain, ControlValue::Absolute(v)) => mix.headphone = v,
+            (A::Load { deck }, ControlValue::Pressed(true)) => {
+                info!("Load deck {deck:?} : le file picker arrive au M6");
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Fallback clavier (specs §2.1) : émet les mêmes commandes moteur que le
-/// futur chemin MIDI. À partir du M3, clavier et MIDI passeront par les
-/// mêmes `mapping::Action` (specs §6.4).
+/// chemin MIDI (specs §6.4).
 fn keyboard_controls(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -418,6 +525,7 @@ fn update_status(
     snapshot: Res<LastSnapshot>,
     decks: Res<Decks>,
     mix: Res<MixState>,
+    midi: Res<MidiRes>,
     mut windows: Query<&mut Window>,
     mut accumulator: Local<f32>,
 ) {
@@ -442,13 +550,14 @@ fn update_status(
     };
 
     let title = format!(
-        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | underruns {} | charge audio {:.0} %",
+        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | MIDI {} | underruns {} | charge audio {:.0} %",
         deck_status(0),
         deck_status(1),
         mix.crossfader,
         mix.master,
         mix.headphone,
         mix.cue_mix,
+        midi.controller.as_deref().unwrap_or("—"),
         snapshot.0.underruns,
         snapshot.0.callback_load * 100.0
     );

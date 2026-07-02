@@ -17,6 +17,13 @@ use crate::track::TrackBuffer;
 pub enum EngineCommand {
     Play(Deck),
     Pause(Deck),
+    /// Bouton cue pressé — sémantique vinyle résolue par le moteur, qui
+    /// connaît son état : en lecture → stop et retour au point cue ; à
+    /// l'arrêt ailleurs qu'au cue → pose le point cue ; à l'arrêt sur le
+    /// cue → pré-écoute tant que le bouton est tenu.
+    CuePress(Deck),
+    /// Relâchement du bouton cue : fin de pré-écoute, retour au point cue.
+    CueRelease(Deck),
     /// Position absolue en samples (48 kHz), clampée à la fin de piste.
     SeekSamples(Deck, u64),
     /// Gain linéaire du deck, clampé à `[0, 1]` (courbe appliquée en amont).

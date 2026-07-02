@@ -28,8 +28,11 @@ const TAP_CAPACITY: usize = 24_000;
 
 /// Extrémités non temps-réel des canaux du moteur (côté UI/workers).
 pub struct EnginePorts {
-    /// UI/MIDI → audio.
+    /// UI → audio.
     pub commands: rtrb::Producer<EngineCommand>,
+    /// Thread MIDI → audio : chemin court (specs §5.1), ring SPSC dédié —
+    /// `take()` par l'app pour le donner au thread MIDI.
+    pub midi_commands: Option<rtrb::Producer<EngineCommand>>,
     /// Dernier état publié par le thread audio.
     pub snapshots: triple_buffer::Output<EngineSnapshot>,
     /// Buffers de piste renvoyés par le callback, à désallouer ici.
@@ -44,6 +47,10 @@ struct DeckState {
     position: f64,
     /// Vitesse de lecture (1.0 = nominale), clampée à ±16 %.
     speed: f64,
+    /// Point cue en frames (sémantique vinyle, cf. `EngineCommand::CuePress`).
+    cue_point: f64,
+    /// Lecture temporaire tant que le bouton cue est tenu.
+    previewing: bool,
     playing: bool,
     cue: bool,
     volume: f32,
@@ -56,6 +63,8 @@ impl Default for DeckState {
             track: None,
             position: 0.0,
             speed: 1.0,
+            cue_point: 0.0,
+            previewing: false,
             playing: false,
             cue: false,
             volume: 1.0,
@@ -80,6 +89,7 @@ pub struct AudioGraph {
     /// Callbacks ayant dépassé leur budget temps.
     budget_overruns: u64,
     commands: rtrb::Consumer<EngineCommand>,
+    midi_commands: rtrb::Consumer<EngineCommand>,
     reclaim: rtrb::Producer<Arc<TrackBuffer>>,
     tap: rtrb::Producer<f32>,
     snapshot_tx: triple_buffer::Input<EngineSnapshot>,
@@ -91,6 +101,7 @@ impl AudioGraph {
     #[allow(clippy::new_without_default)]
     pub fn new() -> (Self, EnginePorts) {
         let (commands_tx, commands_rx) = rtrb::RingBuffer::new(COMMAND_CAPACITY);
+        let (midi_commands_tx, midi_commands_rx) = rtrb::RingBuffer::new(COMMAND_CAPACITY);
         let (reclaim_tx, reclaim_rx) = rtrb::RingBuffer::new(RECLAIM_CAPACITY);
         let (tap_tx, tap_rx) = rtrb::RingBuffer::new(TAP_CAPACITY);
         let (snapshot_tx, snapshot_rx) =
@@ -108,6 +119,7 @@ impl AudioGraph {
             snapshot: EngineSnapshot::default(),
             budget_overruns: 0,
             commands: commands_rx,
+            midi_commands: midi_commands_rx,
             reclaim: reclaim_tx,
             tap: tap_tx,
             snapshot_tx,
@@ -115,6 +127,7 @@ impl AudioGraph {
         };
         let ports = EnginePorts {
             commands: commands_tx,
+            midi_commands: Some(midi_commands_tx),
             snapshots: snapshot_rx,
             reclaim: reclaim_rx,
             tap: tap_rx,
@@ -190,6 +203,7 @@ impl AudioGraph {
             snap.playing = deck.playing;
             snap.cue = deck.cue;
             snap.position_samples = deck.position as u64;
+            snap.cue_point_samples = deck.cue_point as u64;
             snap.track_frames = deck.track.as_ref().map_or(0, |t| t.frames() as u64);
             snap.speed = if deck.playing { deck.speed } else { 0.0 };
             snap.rms = [(sum_sq[0] / n).sqrt(), (sum_sq[1] / n).sqrt()];
@@ -262,13 +276,56 @@ impl AudioGraph {
     }
 
     fn drain_commands(&mut self) {
+        // Deux rings SPSC : UI et thread MIDI (chemin court §5.1).
         while let Ok(command) = self.commands.pop() {
+            self.apply_command(command);
+        }
+        while let Ok(command) = self.midi_commands.pop() {
+            self.apply_command(command);
+        }
+    }
+
+    fn apply_command(&mut self, command: EngineCommand) {
+        {
             match command {
                 EngineCommand::Play(d) => {
                     let deck = self.deck_mut(d);
                     deck.playing = deck.track.is_some();
+                    deck.previewing = false;
                 }
-                EngineCommand::Pause(d) => self.deck_mut(d).playing = false,
+                EngineCommand::Pause(d) => {
+                    let deck = self.deck_mut(d);
+                    deck.playing = false;
+                    deck.previewing = false;
+                }
+                EngineCommand::CuePress(d) => {
+                    let deck = self.deck_mut(d);
+                    if deck.track.is_none() {
+                        return;
+                    }
+                    if deck.playing && !deck.previewing {
+                        // En lecture : stop et retour au point cue.
+                        deck.playing = false;
+                        deck.position = deck.cue_point;
+                    } else if !deck.playing {
+                        if (deck.position - deck.cue_point).abs() < 1.0 {
+                            // À l'arrêt sur le cue : pré-écoute tenue.
+                            deck.previewing = true;
+                            deck.playing = true;
+                        } else {
+                            // À l'arrêt ailleurs : pose le point cue ici.
+                            deck.cue_point = deck.position;
+                        }
+                    }
+                }
+                EngineCommand::CueRelease(d) => {
+                    let deck = self.deck_mut(d);
+                    if deck.previewing {
+                        deck.previewing = false;
+                        deck.playing = false;
+                        deck.position = deck.cue_point;
+                    }
+                }
                 EngineCommand::SeekSamples(d, pos) => {
                     let deck = self.deck_mut(d);
                     let max = deck.track.as_ref().map_or(0, |t| t.frames() as u64);
