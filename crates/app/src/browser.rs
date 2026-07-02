@@ -28,9 +28,14 @@ use crate::theme::{color, font, layout};
 use crate::{LoadSender, spawn_load_worker};
 
 const AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "flac", "wav", "ogg", "m4a", "aac"];
-/// Pool de lignes pré-créées (les surnuméraires sont masquées).
-const MAX_ROWS: usize = 28;
+/// Pre-created row pool — sized for tall windows so the list always fills
+/// the panel down to the metadata strip (extra rows stay hidden).
+const MAX_ROWS: usize = 64;
 const ROW_HEIGHT: f32 = 24.0;
+/// Bottom strip heights (from the bottom edge): hint line, load buttons,
+/// then the 2-line metadata block; the file list stops right above it.
+const META_TOP: f32 = 84.0;
+const META_BASELINE: f32 = 46.0;
 
 pub struct BrowserPlugin;
 
@@ -57,6 +62,10 @@ pub struct Browser {
     selected: usize,
     scroll: usize,
     dirty: bool,
+    /// Metadata strip content, rebuilt when the selection changes
+    /// (`meta_index` is the entry it was computed for).
+    meta_text: String,
+    meta_index: Option<usize>,
 }
 
 impl Default for Browser {
@@ -76,6 +85,8 @@ impl Default for Browser {
             selected: 0,
             scroll: 0,
             dirty: true,
+            meta_text: String::new(),
+            meta_index: None,
         }
     }
 }
@@ -126,8 +137,52 @@ impl Browser {
         self.dirty = true;
     }
 
+    /// Rebuilds the metadata strip for the selected entry when it changed.
+    /// The audio probe reads headers only (`decode::probe_info`) — cheap,
+    /// and it runs at selection speed, not per frame.
+    fn refresh_metadata(&mut self) {
+        if self.meta_index == Some(self.selected) {
+            return;
+        }
+        self.meta_index = Some(self.selected);
+        self.meta_text = match self.entries.get(self.selected) {
+            None => String::new(),
+            Some(entry) if entry.is_dir => "dossier".into(),
+            Some(entry) => {
+                let size = std::fs::metadata(&entry.path)
+                    .map(|m| format!("{:.1} Mo", m.len() as f64 / 1_048_576.0))
+                    .unwrap_or_else(|_| "?".into());
+                let ext = entry
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_uppercase)
+                    .unwrap_or_default();
+                let info = decode::probe_info(&entry.path).unwrap_or_default();
+                let mut tech = format!("{size} · {ext}");
+                if let Some(seconds) = info.duration_seconds {
+                    let s = seconds.round() as u64;
+                    tech.push_str(&format!(" · {}:{:02}", s / 60, s % 60));
+                }
+                if let Some(rate) = info.sample_rate {
+                    tech.push_str(&format!(" · {:.1} kHz", f64::from(rate) / 1000.0));
+                }
+                if let Some(channels) = info.channels {
+                    tech.push_str(&format!(" · {channels} can."));
+                }
+                match (info.artist, info.title) {
+                    (Some(artist), Some(title)) => format!("{tech}\n{artist} — {title}"),
+                    (Some(artist), None) => format!("{tech}\n{artist}"),
+                    (None, Some(title)) => format!("{tech}\n{title}"),
+                    (None, None) => tech,
+                }
+            }
+        };
+    }
+
     fn refresh(&mut self) {
         self.dirty = false;
+        self.meta_index = None;
         self.entries.clear();
         // Ligne « .. » synthétique : la remontée au parent reste possible
         // avec le seul encodeur du contrôleur.
@@ -192,6 +247,8 @@ struct TitleText;
 #[derive(Component)]
 struct HintText;
 #[derive(Component)]
+struct MetaText;
+#[derive(Component)]
 struct Row(usize);
 #[derive(Component)]
 struct RowHighlight;
@@ -243,6 +300,18 @@ fn spawn_browser(
         Anchor::BOTTOM_LEFT,
         Transform::default(),
         HintText,
+    ));
+    commands.spawn((
+        Text2d::new(""),
+        TextFont {
+            font: fonts.text.clone().into(),
+            font_size: FontSize::Px(font::CAPTION),
+            ..Default::default()
+        },
+        TextColor(color::TEXT_MUTED),
+        Anchor::BOTTOM_LEFT,
+        Transform::default(),
+        MetaText,
     ));
     for index in 0..MAX_ROWS {
         commands.spawn((
@@ -401,6 +470,16 @@ fn render(
             Without<Row>,
             Without<TitleText>,
             Without<Backdrop>,
+            Without<MetaText>,
+        ),
+    >,
+    mut meta: Query<
+        (&mut Text2d, &mut Visibility),
+        (
+            With<MetaText>,
+            Without<Row>,
+            Without<TitleText>,
+            Without<HintText>,
         ),
     >,
     mut chrome: Query<
@@ -415,12 +494,14 @@ fn render(
             Without<Row>,
             Without<TitleText>,
             Without<HintText>,
+            Without<MetaText>,
         ),
     >,
 ) {
     if browser.dirty {
         browser.refresh();
     }
+    browser.refresh_metadata();
     // Fenêtre de défilement autour de la sélection.
     let visible = view.rows_visible.max(1);
     if browser.selected < browser.scroll {
@@ -449,6 +530,12 @@ fn render(
                 (browser.selected + 1).min(browser.entries.len()),
                 browser.entries.len()
             );
+        }
+    }
+    if let Ok((mut text, mut visibility)) = meta.single_mut() {
+        *visibility = shown;
+        if browser.open && text.0 != browser.meta_text {
+            text.0.clone_from(&browser.meta_text);
         }
     }
 
@@ -489,6 +576,7 @@ fn place(
         Query<&mut Transform, With<RowHighlight>>,
         Query<(&mut Transform, &LoadButton)>,
         Query<(&mut Transform, &LoadButtonLabel)>,
+        Query<&mut Transform, With<MetaText>>,
     )>,
 ) {
     let Ok(window) = windows.single() else { return };
@@ -501,7 +589,10 @@ fn place(
     let footer = -height * 0.5 + 40.0;
     view.rect_center = center;
     view.rect_size = Vec2::new(width, height);
-    view.rows_visible = (((list_top - footer - 20.0) / ROW_HEIGHT) as usize).min(MAX_ROWS);
+    // The list fills the panel down to the metadata strip whatever the
+    // window height (the row pool is sized accordingly).
+    let list_bottom = -height * 0.5 + META_TOP;
+    view.rows_visible = (((list_top - list_bottom) / ROW_HEIGHT) as usize).min(MAX_ROWS);
 
     if let Ok(mut transform) = sets.p0().single_mut() {
         transform.translation = center.extend(10.0);
@@ -532,5 +623,12 @@ fn place(
     for (mut transform, label) in &mut sets.p6() {
         let x = center.x + (label.0 as f32 - 0.5) * 96.0;
         transform.translation = Vec3::new(x, footer - 12.0, 12.0);
+    }
+    if let Ok(mut transform) = sets.p7().single_mut() {
+        transform.translation = Vec3::new(
+            center.x - width * 0.5 + 12.0,
+            -height * 0.5 + META_BASELINE,
+            11.0,
+        );
     }
 }

@@ -59,6 +59,67 @@ pub enum DecodeError {
     Resample(String),
 }
 
+/// Lightweight header probe for the library browser (specs §6.3): duration,
+/// technical format and tags, **without decoding any audio**. Best-effort —
+/// a field the container doesn't expose is simply `None`.
+#[derive(Debug, Default, Clone)]
+pub struct ProbeInfo {
+    pub duration_seconds: Option<f64>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<usize>,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+}
+
+/// Probes `path` headers. `None` when the file isn't recognized audio.
+pub fn probe_info(path: &Path) -> Option<ProbeInfo> {
+    use symphonia::core::meta::StandardTag;
+
+    let file = File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .ok()?;
+
+    let track = format.default_track(TrackType::Audio)?;
+    let params = track.codec_params.as_ref().and_then(|p| p.audio());
+    let sample_rate = params.and_then(|p| p.sample_rate);
+    let channels = params.and_then(|p| p.channels.as_ref().map(|c| c.count()));
+    let duration_seconds = match (track.num_frames, sample_rate) {
+        (Some(frames), Some(rate)) if rate > 0 => Some(frames as f64 / f64::from(rate)),
+        _ => None,
+    };
+
+    let mut artist = None;
+    let mut title = None;
+    if let Some(revision) = format.metadata().current() {
+        for tag in &revision.media.tags {
+            match &tag.std {
+                Some(StandardTag::Artist(v)) => artist = Some(v.to_string()),
+                Some(StandardTag::TrackTitle(v)) => title = Some(v.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    Some(ProbeInfo {
+        duration_seconds,
+        sample_rate,
+        channels,
+        artist,
+        title,
+    })
+}
+
 /// Decodes the whole file in memory, then resamples to `target_rate` (the
 /// engine's stream rate) when needed. A truncated file yields a partial
 /// track flagged by `truncated`, never an error (as long as at least one
