@@ -196,11 +196,9 @@ commit counter:
 
 Every release **tag** is `v<that exact version>` (e.g.
 `Cargo.toml = 0.2.1` → tag `v0.2.1`); the release CI **fails** the run if
-they disagree, and refuses to publish without a `LICENSE` file (the license
-is still to be confirmed — cf. ROADMAP). The `-dev` suffix of the current
-version (`0.1.0-dev`) marks a line that never shipped: it drops at the
-first release, and the `v[0-9]+.[0-9]+.[0-9]+` trigger mechanically cannot
-match a pre-release.
+they disagree. The `-dev` suffix of the current version (`0.1.0-dev`) marks
+a line that never shipped: it drops at the first release, and the
+`v[0-9]+.[0-9]+.[0-9]+` trigger mechanically cannot match a pre-release.
 
 A tag is cut in two cases: **(a) on explicit request** — any version, a
 `fix:` patch included, can be released when you decide it ships; and

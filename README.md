@@ -12,8 +12,8 @@ by shaders (Bevy/wgpu).
 
 **Status**: POC v0.1 code-complete (M0→M6, green CI on Linux/macOS/Windows)
 — what remains is the hardware validation with the controller
-([TESTING.md](TESTING.md)) and the license confirmation. Resuming work:
-"Resuming work" section of the [ROADMAP](ROADMAP.md).
+([TESTING.md](TESTING.md)). Resuming work: "Resuming work" section of the
+[ROADMAP](ROADMAP.md).
 
 ## Getting started
 
@@ -116,13 +116,26 @@ tasks (specs §1.4).
 
 ## License
 
-GPL-3.0 envisioned (to be confirmed — compatibility with the Mixxx mappings
-used as reference, cf. specs §5.3). The release CI refuses to publish
-without a `LICENSE` file, so no binary ships before the license is settled
-(CONSTITUTION-DEV Rule 11).
+ober is dual-licensed under either of
+
+- **MIT license** ([LICENSE-MIT](LICENSE-MIT)), or
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)),
+
+at your option. This is the conventional Rust-ecosystem dual license,
+matching the dependencies.
+
+The Mixxx project (GPL) is used strictly as a **read-only reference**: the
+controller mapping documents the hardware's MIDI protocol (facts, to be
+validated with `midi-probe` on the device itself), and no Mixxx code is
+ported — cf. the license comment in [Cargo.toml](Cargo.toml).
 
 The embedded **fonts** keep their own permissive licenses, shipped in every
 release archive alongside the generated **`THIRD-PARTY-LICENSES.html`**
 (`cargo about`, [about.toml](about.toml)): Inter under the **SIL Open Font
 License 1.1**, Phosphor under the **MIT license**
 (`crates/app/src/fonts/`).
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual-licensed as above, without any additional terms or
+conditions.

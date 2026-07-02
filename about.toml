@@ -7,11 +7,10 @@
 # is NOT in this list makes `cargo about generate` FAIL — a loud tripwire if a
 # future dependency introduces an unvetted license.
 #
-# GPL-2.0-only and LGPL-2.1-or-later are deliberately ABSENT: where they appear in
-# the tree they are an `OR` alternative, so cargo-about selects one of the accepted
-# permissive licenses instead. GPL-3.0-or-later is accepted for one reason only:
-# it is the (to-be-confirmed) license of the workspace crates themselves — no
-# external dependency carries it.
+# GPL / LGPL are deliberately ABSENT: where they appear in the tree they are an
+# `OR` alternative, so cargo-about selects one of the accepted permissive licenses
+# instead — ober carries no copyleft obligation (and porting Mixxx code would
+# break this tripwire on purpose, cf. Cargo.toml license comment).
 accepted = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -29,7 +28,6 @@ accepted = [
     "Ubuntu-font-1.0",
     "Unlicense",
     "MPL-2.0",
-    "GPL-3.0-or-later",
 ]
 
 # Build-/host-only crates do not ship in the binary, but enumerating their licenses

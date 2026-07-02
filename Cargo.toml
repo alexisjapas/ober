@@ -14,8 +14,10 @@ members = [
 # marks a line that never shipped; it drops at the first release.
 version = "0.1.0-dev"
 edition = "2024"
-# To be confirmed before first publication (specs — license, Mixxx mapping compat).
-license = "GPL-3.0-or-later"
+# Conventional Rust-ecosystem dual license, matching the dependencies. Mixxx
+# stays a read-only reference (MIDI codes are facts about the hardware); never
+# port its GPL code — that would be a one-way door out of this license.
+license = "MIT OR Apache-2.0"
 
 # Single version registry for the workspace. Each crate references these entries
 # with `dep.workspace = true` at the milestone that needs them.

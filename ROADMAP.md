@@ -9,7 +9,7 @@ started until the previous one's criterion holds. Deliberate exception: the
 
 | Milestone | Content | Exit criterion | Status |
 |---|---|---|---|
-| **M0** | Scaffolding: workspace, nix flake, CI, type skeletons | `cargo test` green inside `nix develop`, green CI | 🟡 `LICENSE` remains |
+| **M0** | Scaffolding: workspace, nix flake, CI, type skeletons | `cargo test` green inside `nix develop`, green CI | ✅ |
 | **M1** | Audio engine: engine + decode, 2 keyboard-driven decks, volume/crossfader, stereo out | 2-track mix without underrun, measured latency ≤ 10 ms | ✅ code+CI · 🎧 latency to measure |
 | **M2** | DSP: 3-band EQ, Hermite varispeed, limiter, 4-channel cue | Working headphone pre-listen on the Inpulse | ✅ code+CI · 4-channel stream **validated on the MK2** · 🎧 listening |
 | **M3** | MIDI in: midir, RON mapping engine, Inpulse mapping (jogs aside) | Every fader/knob/button operational | ✅ code+CI · 🎧 MK2 codes via midi-probe |
@@ -51,12 +51,10 @@ All project knowledge lives in the repo: verbatim specs in
 2. **Latency**: the MK2 imposes 1114 frames (≈ 23 ms) in raw 4-channel ALSA
    — explore the PipeWire node and 44.1 kHz (cf. docs/latency.md),
    otherwise document the constraint.
-3. **License**: confirm GPL-3.0 and add `LICENSE` (last M0 box — the
-   release CI refuses to publish without it, CONSTITUTION-DEV Rule 11).
-4. **First release**: drop the `-dev` suffix, annotated tag `v0.1.0`
+3. **First release**: drop the `-dev` suffix, annotated tag `v0.1.0`
    (message = changelog) — the release CI builds and publishes the three
    platforms (Rule 11).
-5. **v0.2**: see "After the POC" at the end of this document.
+4. **v0.2**: see "After the POC" at the end of this document.
 
 ---
 
@@ -71,7 +69,7 @@ All project knowledge lives in the repo: verbatim specs in
 - [x] `cargo test --workspace`, `clippy -D warnings`, `fmt` and Bevy boundary green inside `nix develop` (Rust 1.96.1, Linux)
 - [x] Pushed to a remote (github.com/alexisjapas/ober) — green CI on the 3 OSes for every commit
 - [x] Quality baseline: [CONSTITUTION-DEV.md](CONSTITUTION-DEV.md) (binding rules, Conventional Commits, semver/tag policy), release CI by annotated tag (`dist` profile, version/LICENSE guards, cargo-about third-party notices), `dist`/`profiling` cargo profiles, English as the persisted language
-- [ ] Confirm the GPL-3.0 license (Mixxx mapping compat) and add `LICENSE`
+- [x] License settled: **MIT OR Apache-2.0** dual (2026-07-02, supersedes the GPL-3.0 the specs envisioned). Mixxx stays a read-only reference — MIDI codes are hardware facts, its GPL code is never ported (Cargo.toml license comment); LICENSE-MIT + LICENSE-APACHE ship in every release archive
 
 ## M1 — Audio engine
 

@@ -26,9 +26,7 @@ defaults:
     shell: bash
 
 jobs:
-  # Guards: the GitHub tag must follow the Cargo.toml version, and a release
-  # cannot ship without a license (Rule 11 — the license is a pending decision,
-  # cf. ROADMAP "Next actions").
+  # Guard: the GitHub tag must follow the Cargo.toml version (Rule 11).
   version-check:
     runs-on: ubuntu-latest
     steps:
@@ -40,12 +38,6 @@ jobs:
           echo "Cargo.toml = $version   tag = $GITHUB_REF_NAME"
           if [ "$version" != "$tag" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version (CONSTITUTION-DEV Rule 11)"
-            exit 1
-          fi
-      - name: A release must ship a LICENSE
-        run: |
-          if [ ! -f LICENSE ]; then
-            echo "::error::No LICENSE file — confirm the license before the first release (CONSTITUTION-DEV Rule 11, ROADMAP M0)"
             exit 1
           fi
 
@@ -156,10 +148,10 @@ jobs:
           # the runtime-config template. Shaders and fonts are embedded in the
           # binary — nothing else to stage.
           cp -r mappings README.md ober.config.example.ron "$dist/"
-          # License files: the project license + the notices of the embedded
-          # fonts (crates/app/src/fonts/) + the bundled notices of the statically
-          # linked dependencies (MIT/Apache require the notices to ship).
-          cp LICENSE THIRD-PARTY-LICENSES.html "$dist/"
+          # License files: the project's dual license + the notices of the
+          # embedded fonts (crates/app/src/fonts/) + the bundled notices of the
+          # statically linked dependencies (MIT/Apache require the notices to ship).
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html "$dist/"
           cp crates/app/src/fonts/OFL-Inter.txt crates/app/src/fonts/LICENSE-Phosphor.txt "$dist/"
 
           if [ "${{ matrix.archive }}" = "zip" ]; then
