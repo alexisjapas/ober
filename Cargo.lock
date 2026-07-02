@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "analysis"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "rustfft",
 ]
@@ -229,7 +229,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "app"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "analysis",
  "anyhow",
@@ -2631,7 +2631,7 @@ checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "decode"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "hound",
  "rubato",
@@ -2810,7 +2810,7 @@ dependencies = [
 
 [[package]]
 name = "engine"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "assert_no_alloc",
  "cpal 0.18.1",
@@ -3982,7 +3982,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "mapping"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "ron",
  "serde",
@@ -4015,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "midi"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
