@@ -37,7 +37,12 @@ de la fenêtre en attendant) :
 | `R` / `P`           | reset pitch A / B            |
 | `N` `M`             | mix casque cue ↔ master      |
 | `J` `K`             | gain casque − / +            |
+| `F` / `L`           | charger une piste (A / B)    |
+| `F12`               | préférences / diagnostics    |
 | molette             | zoom des waveforms           |
+
+La souris pilote aussi les boutons (play/cue/PFL/load) et les sliders
+(volumes, pitch, EQ, crossfader, casque) — mêmes actions que le MIDI.
 
 Audio : détection automatique d'un périphérique « DJControl » (stream
 4 canaux master + casque s'il le supporte), sinon périphérique par défaut en

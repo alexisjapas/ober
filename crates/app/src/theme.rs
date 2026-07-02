@@ -50,6 +50,10 @@ pub mod color {
     pub const VU_OK: Color = srgb(0.30, 0.78, 0.42);
     pub const VU_WARN: Color = srgb(0.95, 0.78, 0.25);
     pub const VU_CLIP: Color = srgb(1.0, 0.32, 0.28);
+
+    /// Widgets (boutons, pistes de sliders, curseurs).
+    pub const WIDGET_BG: Color = srgb(0.10, 0.11, 0.15);
+    pub const THUMB: Color = srgb(0.80, 0.82, 0.88);
 }
 
 /// Échelle typographique (px) — Inter au M6b.
@@ -65,8 +69,11 @@ pub mod layout {
     pub const MARGIN: f32 = 16.0;
     /// Fraction de la hauteur de fenêtre occupée par chaque waveform.
     pub const WAVE_HEIGHT_FRAC: f32 = 0.26;
-    /// Fraction de la largeur occupée par les waveforms.
-    pub const WAVE_WIDTH_FRAC: f32 = 0.96;
+    /// Fraction de la largeur occupée par les waveforms (les colonnes de
+    /// widgets par deck occupent les bords).
+    pub const WAVE_WIDTH_FRAC: f32 = 0.74;
+    /// Largeur des colonnes de widgets par deck, px.
+    pub const SIDE_COLUMN_PX: f32 = 120.0;
     /// Dimensions d'une barre de VU master, px.
     pub const VU_WIDTH: f32 = 14.0;
     pub const VU_HEIGHT: f32 = 120.0;

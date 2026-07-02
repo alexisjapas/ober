@@ -8,6 +8,7 @@ use bevy::sprite::Anchor;
 
 use engine::SAMPLE_RATE;
 
+use crate::fonts::UiFonts;
 use crate::theme::{color, font, layout};
 use crate::{Analyzers, AudioEngine, Decks, LastSnapshot, MidiRes, MixState};
 
@@ -32,7 +33,7 @@ struct DeckText(usize);
 #[derive(Component)]
 struct StatusText;
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, fonts: Res<UiFonts>) {
     for deck in 0..2 {
         let accent = if deck == 0 {
             color::DECK_A
@@ -42,6 +43,7 @@ fn spawn_hud(mut commands: Commands) {
         commands.spawn((
             Text2d::new(if deck == 0 { "Deck A" } else { "Deck B" }),
             TextFont {
+                font: fonts.text.clone().into(),
                 font_size: FontSize::Px(font::TITLE),
                 ..Default::default()
             },
@@ -54,6 +56,7 @@ fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         Text2d::new("—"),
         TextFont {
+            font: fonts.text.clone().into(),
             font_size: FontSize::Px(font::CAPTION),
             ..Default::default()
         },

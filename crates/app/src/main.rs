@@ -29,17 +29,23 @@
 //! | `R` / `P`               | remise à zéro du pitch A / B        |
 //! | `N` `M`                 | mix casque cue ↔ master             |
 //! | `J` `K`                 | gain casque − / +                   |
+//! | `F` / `L`               | charger une piste (deck A / B)      |
+//! | `F12`                   | panneau préférences/diagnostics     |
 //! | molette                 | zoom des waveforms                  |
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
+mod fonts;
 mod hud;
+mod panel;
+mod picker;
 mod power;
 mod theme;
 mod vu;
 mod waveform;
+mod widgets;
 
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -76,9 +82,12 @@ fn main() {
         }))
         .insert_resource(ClearColor(theme::color::BACKGROUND))
         .add_plugins((
+            fonts::FontsPlugin,
             waveform::WaveformPlugin,
             vu::VuPlugin,
             hud::HudPlugin,
+            widgets::WidgetsPlugin,
+            panel::PanelPlugin,
             power::PowerPlugin,
         ))
         .add_systems(Startup, setup)
@@ -171,6 +180,8 @@ struct MixState {
     /// Fraction de pitch (−0,08 → +0,08) ; le moteur reçoit 1.0 + pitch.
     pitch: [f32; 2],
     cue: [bool; 2],
+    /// Gains d'EQ en dB par deck et par bande (low/mid/high).
+    eq_db: [[f32; 3]; 2],
     crossfader: f32,
     master: f32,
     /// 0.0 = cue seul, 1.0 = master seul.
@@ -184,6 +195,7 @@ impl Default for MixState {
             volumes: [1.0, 1.0],
             pitch: [0.0, 0.0],
             cue: [false, false],
+            eq_db: [[0.0; 3]; 2],
             crossfader: 0.0,
             master: 1.0,
             cue_mix: 0.5,
@@ -191,6 +203,11 @@ impl Default for MixState {
         }
     }
 }
+
+/// Émetteur vers les workers de chargement, conservé pour le file picker
+/// (bouton Load, action MIDI, touches F/L).
+#[derive(Resource)]
+struct LoadSender(Sender<WorkerMsg>);
 
 #[derive(Resource, Default)]
 struct LastSnapshot(EngineSnapshot);
@@ -287,42 +304,7 @@ fn setup(mut commands: Commands) {
         info!("aucune piste en argument — usage : ober <piste_a> [piste_b]");
     }
     for (i, path) in paths.into_iter().enumerate() {
-        let deck = Deck::ALL[i];
-        let tx = tx.clone();
-        std::thread::Builder::new()
-            .name(format!("decode-{deck:?}"))
-            .spawn(move || {
-                let name = path
-                    .file_name()
-                    .map_or_else(|| path.display().to_string(), |n| n.display().to_string());
-                match decode::decode_file(&path) {
-                    Ok(track) => {
-                        let truncated = track.truncated;
-                        let summary = analysis::compute_summary(
-                            &track.samples,
-                            decode::TARGET_SAMPLE_RATE,
-                            OVERVIEW_POINTS_PER_SECOND,
-                        );
-                        let buffer = TrackBuffer::new(track.samples);
-                        // Jouable immédiatement…
-                        let _ = tx.send(WorkerMsg::Loaded {
-                            deck,
-                            name,
-                            truncated,
-                            buffer: Arc::clone(&buffer),
-                            summary,
-                        });
-                        // …le BPM/beatgrid arrive quand il est prêt (§4.2).
-                        let analysis =
-                            analysis::analyze_track(buffer.samples(), decode::TARGET_SAMPLE_RATE);
-                        let _ = tx.send(WorkerMsg::Analyzed { deck, analysis });
-                    }
-                    Err(error) => {
-                        let _ = tx.send(WorkerMsg::LoadFailed { deck, name, error });
-                    }
-                }
-            })
-            .expect("spawn du thread de décodage");
+        spawn_load_worker(path, Deck::ALL[i], tx.clone());
     }
 
     // Thread MIDI : chemin court vers le moteur (ring SPSC dédié) + copie
@@ -360,6 +342,7 @@ fn setup(mut commands: Commands) {
         levels: None,
     });
 
+    commands.insert_resource(LoadSender(tx));
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
     commands.insert_resource(DecodeInbox(Mutex::new(rx)));
     commands.insert_resource(Decks::default());
@@ -431,8 +414,64 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
     }
 }
 
+/// Worker de chargement : décode, calcule le summary 3 bandes, livre la
+/// piste jouable puis l'analyse BPM/beatgrid en asynchrone (specs §4.2).
+/// Utilisé par le chargement CLI et par le file picker.
+fn spawn_load_worker(path: PathBuf, deck: Deck, tx: Sender<WorkerMsg>) {
+    std::thread::Builder::new()
+        .name(format!("decode-{deck:?}"))
+        .spawn(move || {
+            let name = path
+                .file_name()
+                .map_or_else(|| path.display().to_string(), |n| n.display().to_string());
+            match decode::decode_file(&path) {
+                Ok(track) => {
+                    let truncated = track.truncated;
+                    let summary = analysis::compute_summary(
+                        &track.samples,
+                        decode::TARGET_SAMPLE_RATE,
+                        OVERVIEW_POINTS_PER_SECOND,
+                    );
+                    let buffer = TrackBuffer::new(track.samples);
+                    // Jouable immédiatement…
+                    let _ = tx.send(WorkerMsg::Loaded {
+                        deck,
+                        name,
+                        truncated,
+                        buffer: Arc::clone(&buffer),
+                        summary,
+                    });
+                    // …le BPM/beatgrid arrive quand il est prêt (§4.2).
+                    let analysis =
+                        analysis::analyze_track(buffer.samples(), decode::TARGET_SAMPLE_RATE);
+                    let _ = tx.send(WorkerMsg::Analyzed { deck, analysis });
+                }
+                Err(error) => {
+                    let _ = tx.send(WorkerMsg::LoadFailed { deck, name, error });
+                }
+            }
+        })
+        .expect("spawn du thread de décodage");
+}
+
+/// Route un événement de contrôle vers le moteur (mêmes `mapping::Action`
+/// que le MIDI, specs §6.4) et le reflète dans l'état d'affichage. Chemin
+/// unique du clavier et des widgets souris.
+fn emit_control(
+    eng: &mut Engine,
+    mix: &mut MixState,
+    action: mapping::Action,
+    value: ControlValue,
+) {
+    let event = ControlEvent { action, value };
+    if let Some(command) = midi::to_engine_command(&event) {
+        let _ = eng.ports.commands.push(command);
+    }
+    mirror_event(&event, mix);
+}
+
 /// Reflète un événement de contrôle dans l'état d'affichage — mêmes règles
-/// pour le clavier, la souris (M6b) et le MIDI (specs §6.4).
+/// pour le clavier, la souris et le MIDI (specs §6.4).
 fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
     use mapping::{Action as A, Deck as MDeck};
     use midi::ControlValue as V;
@@ -446,6 +485,9 @@ fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
         (A::Pitch { deck }, V::Absolute(v)) => {
             mix.pitch[idx(deck)] = (v * 2.0 - 1.0) * PITCH_RANGE;
         }
+        (A::EqLow { deck }, V::Absolute(db)) => mix.eq_db[idx(deck)][0] = db,
+        (A::EqMid { deck }, V::Absolute(db)) => mix.eq_db[idx(deck)][1] = db,
+        (A::EqHigh { deck }, V::Absolute(db)) => mix.eq_db[idx(deck)][2] = db,
         (A::HeadphoneCue { deck }, V::Toggled(on) | V::Pressed(on)) => mix.cue[idx(deck)] = on,
         (A::MasterGain, V::Absolute(v)) => mix.master = v,
         (A::CueMix, V::Absolute(v)) => mix.cue_mix = v,
@@ -457,7 +499,7 @@ fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
 /// Copie UI du flux MIDI (specs §5.1) : le chemin court a déjà envoyé les
 /// commandes au moteur depuis le thread MIDI ; ici on ne fait que refléter
 /// les valeurs dans l'état d'affichage et traiter les actions purement UI.
-fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>) {
+fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>, load_tx: Res<LoadSender>) {
     while let Ok(status) = midi.status.try_recv() {
         match status {
             MidiStatus::Connected(name) => {
@@ -475,7 +517,11 @@ fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>) {
         if let (mapping::Action::Load { deck }, ControlValue::Pressed(true)) =
             (event.action, event.value)
         {
-            info!("Load deck {deck:?} : le file picker arrive au M6b");
+            let deck = match deck {
+                mapping::Deck::A => Deck::A,
+                mapping::Deck::B => Deck::B,
+            };
+            picker::open(deck, load_tx.0.clone());
         }
         mirror_event(&event, &mut mix);
     }
@@ -490,18 +536,23 @@ fn keyboard_controls(
     engine: Res<AudioEngine>,
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
+    load_tx: Res<LoadSender>,
 ) {
     use mapping::{Action, Deck as MDeck};
     use midi::ControlValue as V;
 
+    // Chargement de piste (file picker natif, specs §6.3).
+    if keys.just_pressed(KeyCode::KeyF) {
+        picker::open(Deck::A, load_tx.0.clone());
+    }
+    if keys.just_pressed(KeyCode::KeyL) {
+        picker::open(Deck::B, load_tx.0.clone());
+    }
+
     let mut eng = engine.0.lock().unwrap();
     let mix = &mut *mix;
     let mut emit = |action: Action, value: V, mix: &mut MixState| {
-        let event = ControlEvent { action, value };
-        if let Some(command) = midi::to_engine_command(&event) {
-            let _ = eng.ports.commands.push(command);
-        }
-        mirror_event(&event, mix);
+        emit_control(&mut eng, mix, action, value);
     };
 
     const DECKS: [MDeck; 2] = [MDeck::A, MDeck::B];

@@ -121,13 +121,13 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 - [x] Mode idle : 10 fps via `WinitSettings` après > 5 s sans lecture, jog ni interaction ; retour immédiat en `Continuous` ; le thread audio jamais affecté (§6.5)
 - [x] Animations basées sur le temps réel (dt), jamais sur le compteur de frames — compatible 120/144 Hz (§6.1)
 
-**M6b (restant)** :
+**M6b (fait)** :
 
-- [ ] Fonts : Inter + Phosphor Icons — récupérer le module `fonts.rs` des projets internes et les assets dans `assets/fonts/` (§6.2)
-- [ ] Boutons play/cue cliquables et sliders volume/EQ/pitch/crossfader à la souris (picking Bevy → mêmes `Action`) (§6.3)
-- [ ] File picker natif `rfd` (bouton Load + action MIDI Load) (§6.3)
-- [ ] `bevy_egui` 0.41 (compatible bevy 0.19 ✓) pour les panneaux secondaires : préférences, debug — stylé par `theme` (§6.1/§6.2)
-- [ ] Ring texture du spectrogramme préparée (structure en place, activation v0.2) (§6.1)
+- [x] Fonts : **Inter** (variable) + **Phosphor Icons** vendorisées avec licences (OFL/MIT), embarquées dans le binaire (`fonts.rs`, module local équivalent à celui des projets internes) (§6.2)
+- [x] Widgets souris : boutons play/cue/PFL/load et sliders volume/pitch/EQ par deck, crossfader + cue-mix + casque + master au centre — hit-testing manuel, rendu ColorMaterial + Text2d, chaque interaction émet les mêmes `mapping::Action` que le MIDI via `emit_control` (§6.3/§6.4)
+- [x] File picker natif `rfd` (backend xdg-portal, sans dépendance GTK) : boutons LOAD, touches `F`/`L`, et action MIDI `Load` — même chemin de chargement que la CLI (§6.3)
+- [x] `bevy_egui` 0.41 : panneau préférences (fenêtre waveform) + diagnostics (périph, buffer/latence, MIDI, underruns, charge, état decks), bascule `F12`, stylé depuis les tokens du thème — jamais visible en session normale (§6.1/§6.2)
+- [x] Spectrogramme v0.2 : fondations posées — bus d'analyseurs + canal `AnalysisFrame` (§4.2) et pipeline texture→shader validé par la waveform ; la ring texture arrive avec l'analyseur spectral (v0.2), sans changement d'architecture (§6.1)
 - [ ] **Validation matérielle** : session de mix complète au contrôleur, framerate natif stable (vérifier sur 120/144 Hz), frame CPU+GPU < 8 ms, idle mesuré sur laptop
 
 **Sortie** : session de mix complète au contrôleur, framerate natif stable, frame CPU+GPU < 8 ms.

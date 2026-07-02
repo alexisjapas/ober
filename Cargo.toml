@@ -49,8 +49,9 @@ ron = "0.12.2"
 # ÉPINGLAGE EXACT de Bevy : les migrations de version sont des tâches
 # planifiées (~1×/an), jamais subies.
 bevy = "=0.19.0"
-bevy_egui = "0.41.0"                                  # M6 — valider la compat avec bevy 0.19 avant usage
-rfd = "0.17.2"                                        # M6 — file picker natif
+bevy_egui = "0.41.0"                                  # compatible bevy 0.19 (vérifié)
+# xdg-portal (pas de dépendance GTK) : dialogue natif via le portail desktop.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 # --- divers ---
 thiserror = "2.0.18"

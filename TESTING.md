@@ -81,8 +81,18 @@ itérer à l'oreille sans recompiler (le fichier local prime sur l'embarqué).
 - [ ] BPM sur pistes réelles : valeur stable et plausible (comparer à Mixxx),
       affichée dans le titre peu après le chargement
 
-## M6 — UI (à détailler au jalon)
+## M6 — UI
 
 - [ ] Session de mix complète au contrôleur sans toucher la souris
+- [ ] Waveforms : défilement parfaitement fluide en lecture (position
+      extrapolée), beatgrid alignée à l'oreille, zoom molette sans à-coup
+      (bascule de mipmap invisible)
+- [ ] Widgets souris : chaque bouton/slider agit et reste synchronisé avec
+      le contrôleur et le clavier (même état affiché)
+- [ ] File picker (`F`/`L`, bouton LOAD, bouton MIDI) : chargement pendant
+      la lecture de l'autre deck sans glitch audio
 - [ ] Framerate natif stable (vérifier sur écran 120/144 Hz), frame < 8 ms
-- [ ] Mode idle 10 fps après 5 s d'inactivité, réveil instantané
+- [ ] Mode idle 10 fps après 5 s d'inactivité (vérifier avec un moniteur de
+      fréquence), réveil instantané, thread audio insensible ; consommation
+      mesurée sur laptop
+- [ ] Panneau F12 : valeurs cohérentes, jamais affiché par défaut

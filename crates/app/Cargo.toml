@@ -20,6 +20,8 @@ anyhow.workspace = true
 serde.workspace = true
 ron.workspace = true
 crossbeam-channel.workspace = true
+bevy_egui.workspace = true
+rfd.workspace = true
 
 [lints]
 workspace = true
