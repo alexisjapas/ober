@@ -96,12 +96,14 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 
 ## M5 — Feedback + analyse
 
-- [ ] Schéma RON `feedback` + moteur `StateChange → MIDI out` : LEDs play/cue, VU ; réserver les états du beatmatch guide (v0.2) dans l'enum (§5.2–5.3)
-- [ ] BPM + beatgrid offline : onsets par flux d'énergie spectrale (rustfft, fenêtres 1024/hop 512) → autocorrélation/histogramme 60–200 BPM (résolution 0,01) → phase du premier beat ; grille fixe (§4.2)
-- [ ] Waveform summary 3 bandes, ~1000 points/s, min/max/RMS (préparation du rendu M6) (§4.2)
-- [ ] Bus d'analyseurs temps réel branché sur le tap audio ; v0.1 : niveaux RMS/peak pour les VU ; canal `AnalysisFrame` → Bevy (§4.2)
-- [ ] Piste jouable dès la fin du décodage, beatgrid livré ensuite (asynchrone) (§4.2)
-- [ ] Corpus de test BPM : clicks générés + extraits réels à tempo connu, tolérance ±0,1 BPM (§7)
+- [x] Schéma RON `feedback` (états play/cue posé/PFL/fin de piste + VU continus avec `scale`, états beatmatch v0.2 réservés) + moteur générique `StateChange → MIDI out` avec diff par binding (n'émet que les changements, ~30 Hz) ; connexion MIDI OUT persistante, init LEDs à la connexion, reset au re-plug (§5.2–5.3)
+- [x] Entrées feedback du mapping Hercules : play/cue/PFL/fin de piste (mêmes notes que les boutons, source Mixxx) — pas de VU MIDI sur ce contrôleur
+- [x] BPM + beatgrid offline : flux d'énergie spectrale (rustfft 1024/hop 512, Hann) → autocorrélation 60–200 BPM avec renfort harmonique → **raffinement par repliement de phase** (précision ≫ 0,01 BPM, l'erreur s'accumule sur toute la piste) → phase par maximisation d'alignement ; grille fixe (§4.2). Raffinement futur : seuil de confiance (un signal sans transitoires produit un tempo parasite)
+- [x] Waveform summary 3 bandes (~1000 points/s, crossovers un pôle 250 Hz/2,5 kHz) — prêt pour le rendu M6 (§4.2)
+- [x] Bus d'analyseurs temps réel branché sur le tap audio (`AnalyzerBus` + `LevelsAnalyzer` RMS/peak), trames vers Bevy, niveaux dans la barre d'état (§4.2)
+- [x] Piste jouable dès la fin du décodage, BPM/beatgrid livrés ensuite (message worker asynchrone, BPM affiché dans le titre) (§4.2)
+- [x] Corpus BPM : clicks générés à 60/87,5/120/174 BPM ±0,1, phase modulaire ±43 ms, silence et pistes courtes refusés (§7) — extraits réels à ajouter quand des fixtures seront versionnées
+- [ ] **Validation matérielle** : LEDs play/cue/PFL synchronisées sur l'Inpulse (checklist TESTING.md), BPM vérifié sur de vraies pistes
 
 **Sortie** : LEDs synchronisées, BPM ±0,1 sur le corpus.
 

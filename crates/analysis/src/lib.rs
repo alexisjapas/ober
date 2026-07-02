@@ -9,6 +9,10 @@
 //!   la fondation des visualisations futures (spectrogramme, chroma,
 //!   corrélation de phase, structure).
 
+pub mod beatgrid;
+
+pub use beatgrid::analyze_track;
+
 /// Un point de waveform summary : min/max/RMS sur une fenêtre (~1 ms).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct WaveformPoint {
@@ -51,6 +55,149 @@ pub enum AnalysisFrame {
 /// implémentations tournent côté worker, jamais dans le callback audio.
 pub trait Analyzer: Send {
     fn process(&mut self, block: &[f32]) -> Option<AnalysisFrame>;
+}
+
+/// Bus d'analyseurs temps réel (specs §4.2) : alimenté par le tap audio
+/// post-mix, il distribue chaque bloc à tous les analyseurs enregistrés.
+/// v0.1 n'en branche qu'un (niveaux) ; c'est la fondation des
+/// visualisations futures (spectrogramme, chroma, phase entre decks…).
+#[derive(Default)]
+pub struct AnalyzerBus {
+    analyzers: Vec<Box<dyn Analyzer>>,
+}
+
+impl AnalyzerBus {
+    pub fn register(&mut self, analyzer: Box<dyn Analyzer>) {
+        self.analyzers.push(analyzer);
+    }
+
+    /// Passe un bloc (stéréo entrelacé) à tous les analyseurs et pousse les
+    /// trames produites dans `sink`.
+    pub fn process(&mut self, block: &[f32], sink: &mut Vec<AnalysisFrame>) {
+        for analyzer in &mut self.analyzers {
+            if let Some(frame) = analyzer.process(block) {
+                sink.push(frame);
+            }
+        }
+    }
+}
+
+/// Analyseur de niveaux RMS/peak pour les VU-mètres (v0.1) : accumule sur
+/// une fenêtre fixe puis émet une trame.
+pub struct LevelsAnalyzer {
+    window_frames: usize,
+    count: usize,
+    sum_sq: [f64; 2],
+    peak: [f32; 2],
+}
+
+impl LevelsAnalyzer {
+    /// `window_frames` : taille de la fenêtre d'intégration (ex. 2048
+    /// frames ≈ 43 ms à 48 kHz — réactif sans scintiller).
+    pub fn new(window_frames: usize) -> Self {
+        Self {
+            window_frames: window_frames.max(1),
+            count: 0,
+            sum_sq: [0.0; 2],
+            peak: [0.0; 2],
+        }
+    }
+}
+
+impl Analyzer for LevelsAnalyzer {
+    fn process(&mut self, block: &[f32]) -> Option<AnalysisFrame> {
+        for frame in block.chunks_exact(2) {
+            self.sum_sq[0] += f64::from(frame[0] * frame[0]);
+            self.sum_sq[1] += f64::from(frame[1] * frame[1]);
+            self.peak[0] = self.peak[0].max(frame[0].abs());
+            self.peak[1] = self.peak[1].max(frame[1].abs());
+            self.count += 1;
+        }
+        if self.count < self.window_frames {
+            return None;
+        }
+        let n = self.count as f64;
+        let frame = AnalysisFrame::Levels {
+            rms: [
+                (self.sum_sq[0] / n).sqrt() as f32,
+                (self.sum_sq[1] / n).sqrt() as f32,
+            ],
+            peak: self.peak,
+        };
+        self.count = 0;
+        self.sum_sq = [0.0; 2];
+        self.peak = [0.0; 2];
+        Some(frame)
+    }
+}
+
+/// Filtre passe-bas un pôle (offline, pour le découpage en bandes du
+/// waveform summary — les biquads précis restent dans `engine::dsp`).
+struct OnePole {
+    alpha: f32,
+    state: f32,
+}
+
+impl OnePole {
+    fn new(cutoff_hz: f32, sample_rate: f32) -> Self {
+        let alpha = 1.0 - (-std::f32::consts::TAU * cutoff_hz / sample_rate).exp();
+        Self { alpha, state: 0.0 }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        self.state += self.alpha * (x - self.state);
+        self.state
+    }
+}
+
+/// Waveform summary 3 bandes (specs §4.2) : basses < ~250 Hz, médiums,
+/// aigus > ~2,5 kHz (crossovers un pôle — suffisant pour du visuel),
+/// min/max/RMS par bande à `points_per_second`. Consommé par le rendu M6.
+pub fn compute_summary(
+    samples_interleaved: &[f32],
+    sample_rate: u32,
+    points_per_second: u32,
+) -> WaveformSummary {
+    let mut summary = WaveformSummary {
+        points_per_second,
+        ..WaveformSummary::default()
+    };
+    let frames = samples_interleaved.len() / 2;
+    if frames == 0 || sample_rate == 0 || points_per_second == 0 {
+        return summary;
+    }
+    let fs = sample_rate as f32;
+    let mut lp_low = OnePole::new(250.0, fs);
+    let mut lp_high = OnePole::new(2_500.0, fs);
+    let window = (sample_rate / points_per_second).max(1) as usize;
+
+    for chunk in samples_interleaved.chunks(window * 2) {
+        let mut acc = [(f32::MAX, f32::MIN, 0.0f64); 3];
+        let n = (chunk.len() / 2).max(1) as f64;
+        for frame in chunk.chunks_exact(2) {
+            let mono = (frame[0] + frame[1]) * 0.5;
+            let low = lp_low.process(mono);
+            let below_high = lp_high.process(mono);
+            let bands = [low, below_high - low, mono - below_high];
+            for (a, b) in acc.iter_mut().zip(bands) {
+                a.0 = a.0.min(b);
+                a.1 = a.1.max(b);
+                a.2 += f64::from(b * b);
+            }
+        }
+        for (dest, a) in [&mut summary.low, &mut summary.mid, &mut summary.high]
+            .into_iter()
+            .zip(acc)
+        {
+            dest.push(WaveformPoint {
+                min: a.0,
+                max: a.1,
+                rms: (a.2 / n).sqrt() as f32,
+            });
+        }
+    }
+    summary
 }
 
 /// Résumé mono-bande min/max/RMS d'une piste stéréo entrelacée (mix L+R),
@@ -121,5 +268,53 @@ mod tests {
     #[test]
     fn overview_vide() {
         assert!(compute_overview(&[], 48_000, 1_000).is_empty());
+    }
+
+    fn stereo_sine(freq: f32, seconds: f32, amplitude: f32) -> Vec<f32> {
+        let n = (seconds * 48_000.0) as usize;
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let s = amplitude * (std::f32::consts::TAU * freq * i as f32 / 48_000.0).sin();
+            out.push(s);
+            out.push(s);
+        }
+        out
+    }
+
+    #[test]
+    fn summary_3_bandes_separe_les_registres() {
+        let energy = |points: &[WaveformPoint]| -> f64 {
+            points.iter().map(|p| f64::from(p.rms * p.rms)).sum::<f64>() / points.len() as f64
+        };
+
+        let bass = compute_summary(&stereo_sine(60.0, 1.0, 0.8), 48_000, 1_000);
+        assert!(energy(&bass.low) > 20.0 * energy(&bass.high), "basses");
+
+        let treble = compute_summary(&stereo_sine(8_000.0, 1.0, 0.8), 48_000, 1_000);
+        assert!(energy(&treble.high) > 20.0 * energy(&treble.low), "aigus");
+
+        let mid = compute_summary(&stereo_sine(1_000.0, 1.0, 0.8), 48_000, 1_000);
+        assert!(energy(&mid.mid) > energy(&mid.low), "médiums vs basses");
+        assert!(energy(&mid.mid) > energy(&mid.high), "médiums vs aigus");
+    }
+
+    #[test]
+    fn levels_analyzer_emet_des_trames_rms_peak() {
+        let mut bus = AnalyzerBus::default();
+        bus.register(Box::new(LevelsAnalyzer::new(2_048)));
+
+        let signal = stereo_sine(440.0, 0.1, 0.5); // 4 800 frames
+        let mut frames = Vec::new();
+        for block in signal.chunks(512) {
+            bus.process(block, &mut frames);
+        }
+        assert_eq!(frames.len(), 2, "4 800 frames / fenêtre 2 048 → 2 trames");
+        let AnalysisFrame::Levels { rms, peak } = frames[0];
+        assert!(
+            (rms[0] - 0.5 / std::f32::consts::SQRT_2).abs() < 0.02,
+            "rms = {}",
+            rms[0]
+        );
+        assert!((peak[0] - 0.5).abs() < 0.01, "peak = {}", peak[0]);
     }
 }

@@ -213,8 +213,94 @@ fn default_bend_return_ms() -> f32 {
     150.0
 }
 
-/// Mapping complet d'un contrôleur. Le schéma `feedback` (LEDs, VU) est
-/// conçu au jalon M5 — les états sont déjà réservés côté specs §5.3.
+/// État observable pour le feedback LED (specs §5.2/§5.3). Les états du
+/// beatmatch guide (v0.2) sont réservés dès maintenant.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FeedbackState {
+    Playing {
+        deck: Deck,
+    },
+    /// Un point cue est posé sur le deck.
+    CueSet {
+        deck: Deck,
+    },
+    HeadphoneCue {
+        deck: Deck,
+    },
+    /// Fin de piste imminente (< 30 s restantes).
+    EndOfTrack {
+        deck: Deck,
+    },
+    /// Niveaux continus (à associer à `scale`).
+    VuMaster,
+    VuDeck {
+        deck: Deck,
+    },
+    // --- beatmatch guide, v0.2 (réservés, valent 0 en v0.1) ---
+    BeatmatchTempoFaster {
+        deck: Deck,
+    },
+    BeatmatchTempoSlower {
+        deck: Deck,
+    },
+    BeatmatchPhaseAhead {
+        deck: Deck,
+    },
+    BeatmatchPhaseBehind {
+        deck: Deck,
+    },
+}
+
+/// Message MIDI sortant d'un feedback.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum FeedbackOutput {
+    NoteOn { ch: u8, note: u8 },
+    CC { ch: u8, cc: u8 },
+}
+
+impl FeedbackOutput {
+    pub fn channel(&self) -> u8 {
+        match *self {
+            FeedbackOutput::NoteOn { ch, .. } | FeedbackOutput::CC { ch, .. } => ch,
+        }
+    }
+
+    /// (statut, data1) du message MIDI.
+    pub fn message_head(&self) -> (u8, u8) {
+        match *self {
+            FeedbackOutput::NoteOn { ch, note } => (0x90 | (ch & 0x0F), note),
+            FeedbackOutput::CC { ch, cc } => (0xB0 | (ch & 0x0F), cc),
+        }
+    }
+}
+
+/// Mise à l'échelle d'un état continu (VU) vers la donnée MIDI.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Scale {
+    Linear(u8, u8),
+}
+
+fn default_on() -> u8 {
+    0x7F
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackBinding {
+    pub state: FeedbackState,
+    pub output: FeedbackOutput,
+    /// Valeur émise quand l'état binaire est actif.
+    #[serde(default = "default_on")]
+    pub on: u8,
+    /// Valeur émise quand l'état binaire est inactif.
+    #[serde(default)]
+    pub off: u8,
+    /// Pour les états continus (VU) : mapping 0..1 → plage MIDI.
+    #[serde(default)]
+    pub scale: Option<Scale>,
+}
+
+/// Mapping complet d'un contrôleur.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mapping {
     pub name: String,
@@ -227,6 +313,9 @@ pub struct Mapping {
     pub init: Vec<(u8, u8, u8)>,
     #[serde(default)]
     pub controls: Vec<ControlBinding>,
+    /// Feedback LED/VU : `StateChange → message MIDI` (specs §5.2).
+    #[serde(default)]
+    pub feedback: Vec<FeedbackBinding>,
     pub jog: JogConfig,
 }
 
@@ -291,6 +380,32 @@ impl Mapping {
                     errors.push(format!(
                         "contrôle dupliqué : controls[{i}] et controls[{j}] partagent {:?} (shift: {})",
                         control.input, control.shift
+                    ));
+                }
+            }
+        }
+
+        for (i, feedback) in self.feedback.iter().enumerate() {
+            let ctx = format!("feedback[{i}] ({:?})", feedback.state);
+            if feedback.output.channel() > 15 {
+                errors.push(format!(
+                    "{ctx} : canal {} hors plage 0–15",
+                    feedback.output.channel()
+                ));
+            }
+            if feedback.on > 127 || feedback.off > 127 {
+                errors.push(format!("{ctx} : valeurs on/off hors plage 0–127"));
+            }
+            if let Some(Scale::Linear(lo, hi)) = feedback.scale
+                && (lo > 127 || hi > 127)
+            {
+                errors.push(format!("{ctx} : échelle hors plage 0–127"));
+            }
+            for (j, other) in self.feedback.iter().enumerate().skip(i + 1) {
+                if feedback.output == other.output {
+                    errors.push(format!(
+                        "feedback dupliqué : feedback[{i}] et feedback[{j}] partagent {:?}",
+                        feedback.output
                     ));
                 }
             }

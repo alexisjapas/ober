@@ -274,6 +274,7 @@ mod tests {
             name: "test".into(),
             device_match: vec!["test".into()],
             init: vec![],
+            feedback: vec![],
             controls: vec![
                 ControlBinding {
                     input: InputSpec::NoteOn { ch: 0, note: 1 },
@@ -340,6 +341,7 @@ mod tests {
             name: "t".into(),
             device_match: vec!["t".into()],
             init: vec![],
+            feedback: vec![],
             controls: vec![ControlBinding {
                 input: InputSpec::CC { ch: 0, cc: 1 },
                 shift: false,

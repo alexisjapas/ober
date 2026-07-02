@@ -68,10 +68,18 @@ itérer à l'oreille sans recompiler (le fichier local prime sur l'embarqué).
       `bend_sensitivity`, `velocity_window_ms`, `scratch_smoothing_ms`,
       `release_ramp_ms` puis reporter les valeurs retenues dans le RON embarqué
 
-## M5 — Feedback (à détailler au jalon)
+## M5 — Feedback + analyse
 
-- [ ] LEDs play/cue synchronisées avec l'état réel
-- [ ] VU LEDs cohérents avec les niveaux affichés
+- [ ] À la connexion : LEDs play/cue/PFL reflètent immédiatement l'état
+      courant (y compris après un débranchement/rebranchement)
+- [ ] Play : LED play (note 0x07) suit lecture/pause, y compris via clavier
+- [ ] Cue : LED cue (note 0x06) allumée dès qu'un point est posé
+- [ ] PFL : LED casque (note 0x0C) suit le toggle (bouton ou touche 1/2)
+- [ ] Fin de piste : LED (note 0x1C) s'allume sous 30 s restantes
+- [ ] Aucun flood MIDI : LEDs stables = aucun message (vérifier au midi-probe
+      sur le port de sortie ou via aseqdump)
+- [ ] BPM sur pistes réelles : valeur stable et plausible (comparer à Mixxx),
+      affichée dans le titre peu après le chargement
 
 ## M6 — UI (à détailler au jalon)
 

@@ -1,29 +1,34 @@
 //! Thread I/O MIDI (specs §5.1) : connexion au contrôleur, hot-plug par
-//! polling (midir ne notifie pas les débranchements), envoi des messages
-//! d'init (mode « full MIDI » des LEDs Hercules), et routage :
+//! polling (midir ne notifie pas les débranchements), et bidirectionnel :
 //!
-//! - **chemin court** : événement traduit → `EngineCommand` poussé dans le
-//!   ring SPSC dédié du moteur, directement depuis le callback midir ;
-//! - **copie UI** : chaque événement part aussi vers Bevy (canal crossbeam)
-//!   pour l'affichage.
+//! - **entrée, chemin court** : événement traduit → `EngineCommand` poussé
+//!   dans le ring SPSC dédié du moteur, directement depuis le callback
+//!   midir ; copie de chaque événement vers Bevy (canal crossbeam) ;
+//! - **sortie, feedback LED** (specs §5.2) : l'app relaie les snapshots du
+//!   moteur ; le moteur de feedback n'émet que les changements, à ~30 Hz,
+//!   sur une connexion de sortie persistante (init LEDs à la connexion).
 //!
-//! L'application ne crashe jamais sur un débranchement : la connexion est
-//! simplement fermée puis retentée à chaque cycle de polling.
+//! L'application ne crashe jamais sur un débranchement : les connexions
+//! sont fermées puis retentées au cycle de scan suivant.
 
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput};
+use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
-use engine::EngineCommand;
+use engine::{EngineCommand, EngineSnapshot};
 use mapping::Mapping;
 
+use crate::feedback::FeedbackEngine;
 use crate::route::to_engine_command;
 use crate::translate::{ControlEvent, MappingEngine};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(1500);
+/// Cadence du feedback (et réactivité de l'arrêt du thread).
+const TICK: Duration = Duration::from_millis(33);
+/// Scan des ports toutes les ~1,5 s (45 ticks).
+const SCAN_EVERY_TICKS: u32 = 45;
 
 /// Statut de connexion, affiché par l'UI (barre d'état).
 #[derive(Debug, Clone, PartialEq)]
@@ -41,8 +46,8 @@ struct Route {
     events: crossbeam_channel::Sender<ControlEvent>,
 }
 
-/// Poignée du sous-système MIDI. Au drop : arrêt du thread et fermeture de
-/// la connexion.
+/// Poignée du sous-système MIDI. Au drop : arrêt du thread et fermeture des
+/// connexions.
 pub struct MidiIo {
     shutdown: mpsc::Sender<()>,
     thread: Option<JoinHandle<()>>,
@@ -50,17 +55,28 @@ pub struct MidiIo {
 
 impl MidiIo {
     /// Démarre le thread MIDI. `commands` est le producteur du ring dédié
-    /// (`EnginePorts::midi_commands`).
+    /// (`EnginePorts::midi_commands`) ; `snapshots` reçoit les copies
+    /// d'état relayées par l'app pour le feedback LED.
     pub fn spawn(
         mapping: Mapping,
         commands: rtrb::Producer<EngineCommand>,
         events: crossbeam_channel::Sender<ControlEvent>,
         status: crossbeam_channel::Sender<MidiStatus>,
+        snapshots: crossbeam_channel::Receiver<EngineSnapshot>,
     ) -> std::io::Result<Self> {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("ober-midi".into())
-            .spawn(move || midi_thread(&mapping, commands, &events, &status, &shutdown_rx))?;
+            .spawn(move || {
+                midi_thread(
+                    &mapping,
+                    commands,
+                    &events,
+                    &status,
+                    &snapshots,
+                    &shutdown_rx,
+                )
+            })?;
         Ok(Self {
             shutdown: shutdown_tx,
             thread: Some(thread),
@@ -82,6 +98,7 @@ fn midi_thread(
     commands: rtrb::Producer<EngineCommand>,
     events: &crossbeam_channel::Sender<ControlEvent>,
     status: &crossbeam_channel::Sender<MidiStatus>,
+    snapshots: &crossbeam_channel::Receiver<EngineSnapshot>,
     shutdown: &mpsc::Receiver<()>,
 ) {
     let mut commands = commands;
@@ -95,38 +112,70 @@ fn midi_thread(
         commands,
         events: events.clone(),
     }));
-    let mut connection: Option<(MidiInputConnection<()>, String)> = None;
+    let mut feedback = FeedbackEngine::new(mapping);
+    let mut input: Option<(MidiInputConnection<()>, String)> = None;
+    let mut output: Option<MidiOutputConnection> = None;
+    let mut last_snapshot = EngineSnapshot::default();
+    let mut messages: Vec<[u8; 3]> = Vec::new();
+    let mut tick: u32 = 0;
 
     loop {
-        let ports = crate::list_input_ports().unwrap_or_default();
+        // Scan des ports : détection du débranchement et (re)connexion.
+        if tick.is_multiple_of(SCAN_EVERY_TICKS) {
+            let ports = crate::list_input_ports().unwrap_or_default();
 
-        // Débranchement : le port connecté a disparu.
-        if let Some((_, name)) = &connection
-            && !ports.iter().any(|p| p == name)
-        {
-            connection = None;
-            let _ = status.send(MidiStatus::Disconnected);
+            if let Some((_, name)) = &input
+                && !ports.iter().any(|p| p == name)
+            {
+                input = None;
+                output = None;
+                let _ = status.send(MidiStatus::Disconnected);
+            }
+
+            if input.is_none()
+                && let Some(port_name) = ports.iter().find(|p| mapping.matches_port(p))
+                && let Some(connection) = connect_input(port_name, &route)
+            {
+                output = connect_output(mapping);
+                if let Some(out) = output.as_mut() {
+                    // Init (ex. mode « full MIDI » des LEDs Hercules).
+                    for (a, b, c) in &mapping.init {
+                        let _ = out.send(&[*a, *b, *c]);
+                    }
+                }
+                feedback.reset();
+                input = Some((connection, port_name.clone()));
+                let _ = status.send(MidiStatus::Connected(port_name.clone()));
+            }
+        }
+        tick = tick.wrapping_add(1);
+
+        // Dernier état publié par le moteur (relayé par l'app).
+        while let Ok(snapshot) = snapshots.try_recv() {
+            last_snapshot = snapshot;
         }
 
-        // (Re)connexion au premier port qui matche le mapping.
-        if connection.is_none()
-            && let Some(port_name) = ports.iter().find(|p| mapping.matches_port(p))
-            && let Some(conn) = connect(port_name, &route)
-        {
-            send_init(mapping);
-            connection = Some((conn, port_name.clone()));
-            let _ = status.send(MidiStatus::Connected(port_name.clone()));
+        // Feedback LED : uniquement les changements (specs §5.2).
+        if let Some(out) = output.as_mut() {
+            messages.clear();
+            feedback.refresh(&last_snapshot, &mut messages);
+            let failed = messages.iter().any(|msg| out.send(msg).is_err());
+            if failed {
+                // Sortie morte (débranchement…) : le scan suivant retentera.
+                output = None;
+            }
         }
 
-        match shutdown.recv_timeout(POLL_INTERVAL) {
+        match shutdown.recv_timeout(TICK) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
-    drop(connection);
+    drop(input);
+    drop(output);
 }
 
-fn connect(port_name: &str, route: &Arc<Mutex<Route>>) -> Option<MidiInputConnection<()>> {
+fn connect_input(port_name: &str, route: &Arc<Mutex<Route>>) -> Option<MidiInputConnection<()>> {
     let mut input = MidiInput::new("ober").ok()?;
     input.ignore(Ignore::None);
     let ports = input.ports();
@@ -155,26 +204,13 @@ fn connect(port_name: &str, route: &Arc<Mutex<Route>>) -> Option<MidiInputConnec
         .ok()
 }
 
-/// Envoie les messages d'init du mapping (ex. activation des LEDs Hercules)
-/// sur le port de sortie du contrôleur. Best-effort : sans port de sortie,
-/// tant pis — le feedback complet arrive au M5.
-fn send_init(mapping: &Mapping) {
-    if mapping.init.is_empty() {
-        return;
-    }
-    let Ok(output) = MidiOutput::new("ober") else {
-        return;
-    };
+/// Ouvre le port de sortie du contrôleur (feedback LED). Best-effort :
+/// sans port de sortie, les LEDs resteront muettes, l'entrée fonctionne.
+fn connect_output(mapping: &Mapping) -> Option<MidiOutputConnection> {
+    let output = MidiOutput::new("ober").ok()?;
     let ports = output.ports();
-    let Some(port) = ports
+    let port = ports
         .iter()
-        .find(|p| output.port_name(p).is_ok_and(|n| mapping.matches_port(&n)))
-    else {
-        return;
-    };
-    if let Ok(mut conn) = output.connect(port, "ober-out") {
-        for (a, b, c) in &mapping.init {
-            let _ = conn.send(&[*a, *b, *c]);
-        }
-    }
+        .find(|p| output.port_name(p).is_ok_and(|n| mapping.matches_port(&n)))?;
+    output.connect(port, "ober-out").ok()
 }

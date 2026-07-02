@@ -119,20 +119,29 @@ impl AppConfig {
 #[derive(Resource)]
 struct AudioEngine(Mutex<Engine>);
 
-struct DecodedPayload {
-    track: decode::DecodedTrack,
-    /// Overview min/max/RMS calculée dans le worker (rendu waveform).
-    overview: Vec<analysis::WaveformPoint>,
-}
-
-struct DecodedMsg {
-    deck: Deck,
-    name: String,
-    result: Result<DecodedPayload, decode::DecodeError>,
+/// Messages des workers de chargement. La piste est jouable dès `Loaded` ;
+/// l'analyse BPM/beatgrid arrive ensuite, asynchrone (specs §4.2).
+enum WorkerMsg {
+    Loaded {
+        deck: Deck,
+        name: String,
+        truncated: bool,
+        buffer: Arc<TrackBuffer>,
+        overview: Vec<analysis::WaveformPoint>,
+    },
+    LoadFailed {
+        deck: Deck,
+        name: String,
+        error: decode::DecodeError,
+    },
+    Analyzed {
+        deck: Deck,
+        analysis: Option<analysis::TrackAnalysis>,
+    },
 }
 
 #[derive(Resource)]
-struct DecodeInbox(Mutex<Receiver<DecodedMsg>>);
+struct DecodeInbox(Mutex<Receiver<WorkerMsg>>);
 
 struct LoadedTrack {
     name: String,
@@ -140,6 +149,8 @@ struct LoadedTrack {
     /// ne désalloue jamais (cf. engine::track) ; sert aussi au rendu.
     buffer: Arc<TrackBuffer>,
     overview: Vec<analysis::WaveformPoint>,
+    /// BPM/beatgrid, livrés après coup par le worker (asynchrone).
+    analysis: Option<analysis::TrackAnalysis>,
 }
 
 #[derive(Resource, Default)]
@@ -186,7 +197,21 @@ struct MidiRes {
     _io: Option<MidiIo>,
     events: crossbeam_channel::Receiver<ControlEvent>,
     status: crossbeam_channel::Receiver<MidiStatus>,
+    /// Relai des snapshots moteur vers le feedback LED (specs §5.2).
+    snapshot_tx: crossbeam_channel::Sender<EngineSnapshot>,
     controller: Option<String>,
+}
+
+/// Bus d'analyseurs temps réel (specs §4.2), nourri par le tap audio.
+/// v0.1 : niveaux RMS/peak pour les VU.
+#[derive(Resource)]
+struct Analyzers {
+    bus: Mutex<analysis::AnalyzerBus>,
+    block: Vec<f32>,
+    frames: Vec<analysis::AnalysisFrame>,
+    /// Derniers niveaux publiés (rms, peak) — consommés par la barre d'état
+    /// (puis les VU-mètres du M6).
+    levels: Option<([f32; 2], [f32; 2])>,
 }
 
 /// Charge le mapping contrôleur : fichier local prioritaire (itération sans
@@ -265,15 +290,32 @@ fn setup(mut commands: Commands) {
                 let name = path
                     .file_name()
                     .map_or_else(|| path.display().to_string(), |n| n.display().to_string());
-                let result = decode::decode_file(&path).map(|track| {
-                    let overview = analysis::compute_overview(
-                        &track.samples,
-                        decode::TARGET_SAMPLE_RATE,
-                        OVERVIEW_POINTS_PER_SECOND,
-                    );
-                    DecodedPayload { track, overview }
-                });
-                let _ = tx.send(DecodedMsg { deck, name, result });
+                match decode::decode_file(&path) {
+                    Ok(track) => {
+                        let truncated = track.truncated;
+                        let overview = analysis::compute_overview(
+                            &track.samples,
+                            decode::TARGET_SAMPLE_RATE,
+                            OVERVIEW_POINTS_PER_SECOND,
+                        );
+                        let buffer = TrackBuffer::new(track.samples);
+                        // Jouable immédiatement…
+                        let _ = tx.send(WorkerMsg::Loaded {
+                            deck,
+                            name,
+                            truncated,
+                            buffer: Arc::clone(&buffer),
+                            overview,
+                        });
+                        // …le BPM/beatgrid arrive quand il est prêt (§4.2).
+                        let analysis =
+                            analysis::analyze_track(buffer.samples(), decode::TARGET_SAMPLE_RATE);
+                        let _ = tx.send(WorkerMsg::Analyzed { deck, analysis });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(WorkerMsg::LoadFailed { deck, name, error });
+                    }
+                }
             })
             .expect("spawn du thread de décodage");
     }
@@ -283,17 +325,34 @@ fn setup(mut commands: Commands) {
     // au clavier.
     let (midi_events_tx, midi_events_rx) = crossbeam_channel::unbounded();
     let (midi_status_tx, midi_status_rx) = crossbeam_channel::unbounded();
+    let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
     let midi_io = load_mapping().and_then(|mapping| {
         let producer = engine.ports.midi_commands.take()?;
-        MidiIo::spawn(mapping, producer, midi_events_tx, midi_status_tx)
-            .inspect_err(|e| error!("thread MIDI : {e}"))
-            .ok()
+        MidiIo::spawn(
+            mapping,
+            producer,
+            midi_events_tx,
+            midi_status_tx,
+            snapshot_rx,
+        )
+        .inspect_err(|e| error!("thread MIDI : {e}"))
+        .ok()
     });
     commands.insert_resource(MidiRes {
         _io: midi_io,
         events: midi_events_rx,
         status: midi_status_rx,
+        snapshot_tx,
         controller: None,
+    });
+
+    let mut bus = analysis::AnalyzerBus::default();
+    bus.register(Box::new(analysis::LevelsAnalyzer::new(2_048)));
+    commands.insert_resource(Analyzers {
+        bus: Mutex::new(bus),
+        block: Vec::new(),
+        frames: Vec::new(),
+        levels: None,
     });
 
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
@@ -313,40 +372,56 @@ fn setup(mut commands: Commands) {
 fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: ResMut<Decks>) {
     let rx = inbox.0.lock().unwrap();
     while let Ok(msg) = rx.try_recv() {
-        match msg.result {
-            Ok(payload) => {
-                if payload.track.truncated {
-                    warn!(
-                        "« {} » : fichier tronqué, partie décodée conservée",
-                        msg.name
-                    );
+        match msg {
+            WorkerMsg::Loaded {
+                deck,
+                name,
+                truncated,
+                buffer,
+                overview,
+            } => {
+                if truncated {
+                    warn!("« {name} » : fichier tronqué, partie décodée conservée");
                 }
-                let buffer = TrackBuffer::new(payload.track.samples);
                 info!(
                     "deck {:?} : « {} » chargée ({:.1} s)",
-                    msg.deck,
-                    msg.name,
+                    deck,
+                    name,
                     buffer.duration_seconds()
                 );
-                decks.tracks[msg.deck.index()] = Some(LoadedTrack {
-                    name: msg.name,
+                decks.tracks[deck.index()] = Some(LoadedTrack {
+                    name,
                     buffer: Arc::clone(&buffer),
-                    overview: payload.overview,
+                    overview,
+                    analysis: None,
                 });
                 let mut eng = engine.0.lock().unwrap();
                 if eng
                     .ports
                     .commands
-                    .push(EngineCommand::SwapTrackBuffer(msg.deck, buffer))
+                    .push(EngineCommand::SwapTrackBuffer(deck, buffer))
                     .is_err()
                 {
                     warn!("file de commandes audio pleine, chargement ignoré");
                 }
             }
-            Err(e) => error!(
-                "deck {:?} : échec du décodage de « {} » : {e}",
-                msg.deck, msg.name
-            ),
+            WorkerMsg::LoadFailed { deck, name, error } => {
+                error!("deck {deck:?} : échec du décodage de « {name} » : {error}");
+            }
+            WorkerMsg::Analyzed { deck, analysis } => {
+                if let Some(loaded) = decks.tracks[deck.index()].as_mut() {
+                    match &analysis {
+                        Some(a) => info!(
+                            "deck {:?} : {:.2} BPM, premier beat à {:.2} s",
+                            deck,
+                            a.bpm,
+                            a.first_beat_sample as f64 / f64::from(SAMPLE_RATE)
+                        ),
+                        None => info!("deck {deck:?} : tempo non détecté"),
+                    }
+                    loaded.analysis = analysis;
+                }
+            }
         }
     }
 }
@@ -528,24 +603,52 @@ fn keyboard_controls(
     }
 }
 
-/// Draine chaque frame les canaux audio → UI : snapshot d'état, récupération
-/// mémoire (les `Arc` se désallouent ici, côté non temps réel) et tap audio
-/// (ignoré pour l'instant — le bus d'analyseurs arrive au M5).
-fn drain_engine(engine: Res<AudioEngine>, mut snapshot: ResMut<LastSnapshot>) {
+/// Draine chaque frame les canaux audio → UI : snapshot d'état (relayé au
+/// feedback LED), récupération mémoire (les `Arc` se désallouent ici, côté
+/// non temps réel) et tap audio → bus d'analyseurs (specs §4.2).
+fn drain_engine(
+    engine: Res<AudioEngine>,
+    mut snapshot: ResMut<LastSnapshot>,
+    midi: Res<MidiRes>,
+    mut analyzers: ResMut<Analyzers>,
+) {
     let mut eng = engine.0.lock().unwrap();
     snapshot.0 = *eng.ports.snapshots.read();
+    // Copie vers le thread MIDI pour les LEDs (ignoré si thread absent).
+    let _ = midi.snapshot_tx.send(snapshot.0);
+
     while eng.ports.reclaim.pop().is_ok() {}
-    while eng.ports.tap.pop().is_ok() {}
+
+    let analyzers = &mut *analyzers;
+    analyzers.block.clear();
+    while let Ok(sample) = eng.ports.tap.pop() {
+        analyzers.block.push(sample);
+    }
+    if !analyzers.block.is_empty() {
+        analyzers.frames.clear();
+        analyzers
+            .bus
+            .lock()
+            .unwrap()
+            .process(&analyzers.block, &mut analyzers.frames);
+        for frame in &analyzers.frames {
+            if let analysis::AnalysisFrame::Levels { rms, peak } = frame {
+                analyzers.levels = Some((*rms, *peak));
+            }
+        }
+    }
 }
 
 /// Barre d'état minimale : tout dans le titre de fenêtre, rafraîchi à ~4 Hz.
 /// La vraie barre d'état (specs §6.3) arrive au M6.
+#[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par ressource
 fn update_status(
     time: Res<Time>,
     snapshot: Res<LastSnapshot>,
     decks: Res<Decks>,
     mix: Res<MixState>,
     midi: Res<MidiRes>,
+    analyzers: Res<Analyzers>,
     mut windows: Query<&mut Window>,
     mut accumulator: Local<f32>,
 ) {
@@ -557,11 +660,15 @@ fn update_status(
 
     let deck_status = |i: usize| -> String {
         let snap = &snapshot.0.decks[i];
-        let name = decks.tracks[i].as_ref().map_or("—", |t| t.name.as_str());
+        let track = decks.tracks[i].as_ref();
+        let name = track.map_or("—", |t| t.name.as_str());
+        let bpm = track
+            .and_then(|t| t.analysis.as_ref())
+            .map_or_else(String::new, |a| format!(" {:.2}bpm", a.bpm));
         let state = if snap.playing { "▶" } else { "⏸" };
         let cue = if snap.cue { " CUE" } else { "" };
         format!(
-            "{state} {} {}/{} {:+.1}%{cue}",
+            "{state} {} {}/{} {:+.1}%{bpm}{cue}",
             name,
             format_time(snap.position_samples),
             format_time(snap.track_frames),
@@ -569,8 +676,11 @@ fn update_status(
         )
     };
 
+    let vu = analyzers.levels.map_or_else(String::new, |(_, peak)| {
+        format!(" | vu {:.2}", peak[0].max(peak[1]))
+    });
     let title = format!(
-        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | MIDI {} | underruns {} | charge audio {:.0} %",
+        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | MIDI {}{vu} | underruns {} | charge audio {:.0} %",
         deck_status(0),
         deck_status(1),
         mix.crossfader,

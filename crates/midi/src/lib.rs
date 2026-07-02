@@ -11,10 +11,12 @@
 //! - **hot-plug** : détection connexion/déconnexion par polling, reconnexion
 //!   automatique, jamais de crash au débranchement.
 
+pub mod feedback;
 pub mod io;
 pub mod route;
 pub mod translate;
 
+pub use feedback::FeedbackEngine;
 pub use io::{MidiIo, MidiStatus};
 pub use route::to_engine_command;
 pub use translate::{ControlEvent, ControlValue, MappingEngine};

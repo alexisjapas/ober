@@ -66,9 +66,19 @@ Mapping(
         (input: CC(ch: 2, cc: 0x0A), action: JogTick(deck: B), mode: Relative(encoding: TwosComplement)),
     ],
 
-    // Feedback LEDs (M5), codes relevés dans Mixxx pour mémoire :
-    //   play A/B : NoteOn 0x91/0x92 note 0x07 — cue : note 0x06
-    //   pfl A/B  : note 0x0C — vinyl : note 0x03 — fin de piste : 0x1C/0x1D
+    // Feedback LEDs (codes relevés dans Mixxx — mêmes notes que les
+    // boutons). Pas de VU MIDI connu sur ce contrôleur : les états VuMaster
+    // et VuDeck du format restent disponibles pour d'autres matériels.
+    feedback: [
+        (state: Playing(deck: A), output: NoteOn(ch: 1, note: 0x07)),
+        (state: Playing(deck: B), output: NoteOn(ch: 2, note: 0x07)),
+        (state: CueSet(deck: A), output: NoteOn(ch: 1, note: 0x06)),
+        (state: CueSet(deck: B), output: NoteOn(ch: 2, note: 0x06)),
+        (state: HeadphoneCue(deck: A), output: NoteOn(ch: 1, note: 0x0C)),
+        (state: HeadphoneCue(deck: B), output: NoteOn(ch: 2, note: 0x0C)),
+        (state: EndOfTrack(deck: A), output: NoteOn(ch: 1, note: 0x1C)),
+        (state: EndOfTrack(deck: B), output: NoteOn(ch: 2, note: 0x1C)),
+    ],
 
     jog: (
         ticks_per_rev: 720,     // à valider avec midi-probe sur le matériel
