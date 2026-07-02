@@ -13,7 +13,9 @@
 //! ```
 //!
 //! Configuration optionnelle dans `ober.config.ron` (répertoire courant) :
-//! périphérique audio (`device_match`) et taille de buffer.
+//! périphérique audio (`device_match`), taille de buffer, fréquence forcée
+//! et sortie master (`Controller`/`System`) — la sortie se change aussi à
+//! chaud depuis le panneau F12 (redémarrage du moteur avec réhydratation).
 //!
 //! Contrôles (positions physiques, étiquettes QWERTY) :
 //!
@@ -57,7 +59,7 @@ mod waveform;
 mod widgets;
 
 use bevy::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, TrackBuffer};
 use midi::{ControlEvent, ControlValue, MidiIo, MidiStatus};
@@ -115,9 +117,10 @@ fn main() {
         .run();
 }
 
-/// Configuration optionnelle (`ober.config.ron`, specs §3.2).
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+/// Configuration optionnelle (`ober.config.ron`, specs §3.2). RON requires
+/// the exact struct name: the file spells `Config(...)`, hence the rename.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, rename = "Config")]
 struct AppConfig {
     /// Substring du nom du périphérique de sortie. Absent → détection
     /// automatique "DJControl" puis périphérique par défaut.
@@ -134,8 +137,8 @@ struct AppConfig {
 
 /// Where the master goes (specs §3.2). `Controller` keeps the name-matched
 /// 4-channel behavior; `System` forces the default device in stereo.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-enum OutputChoice {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum OutputChoice {
     #[default]
     Controller,
     System,
@@ -159,6 +162,28 @@ impl AudioSettings {
             sample_rate: self.sample_rate,
             use_default_device: self.output == OutputChoice::System,
         }
+    }
+}
+
+/// Persists the audio settings to `ober.config.ron` (options panel). Plain
+/// RON dump — hand-written comments in the file are not preserved.
+fn save_config(settings: &AudioSettings) {
+    let config = AppConfig {
+        device_match: settings.device_match.clone(),
+        buffer_frames: Some(settings.buffer_frames),
+        sample_rate: settings.sample_rate,
+        output: settings.output,
+    };
+    let pretty = ron::ser::PrettyConfig::default().struct_names(true);
+    match ron::ser::to_string_pretty(&config, pretty) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(CONFIG_PATH, text) {
+                error!("écriture de {CONFIG_PATH} impossible : {e}");
+            } else {
+                info!("configuration enregistrée dans {CONFIG_PATH}");
+            }
+        }
+        Err(e) => error!("sérialisation de la configuration : {e}"),
     }
 }
 

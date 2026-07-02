@@ -17,4 +17,9 @@ Config(
     // (the DJControl Inpulse 200 Mk2 is natively 44.1 kHz-only: at 48 kHz
     // the ALSA resampler imposes a ~23 ms buffer).
     sample_rate: None,
+    // Master output: `Controller` (name-matched card, 4-channel
+    // master + headphones) or `System` (default PC device, stereo).
+    // Switchable at runtime from the F12 panel, which persists the choice
+    // here (hand-written comments are then lost).
+    output: Controller,
 )

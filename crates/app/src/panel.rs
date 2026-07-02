@@ -7,7 +7,10 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::theme;
 use crate::waveform::WaveZoom;
-use crate::{AudioEngine, LastSnapshot, LoadSender, MidiRes, picker};
+use crate::{
+    AudioEngine, AudioSettings, LastSnapshot, LoadSender, MidiRes, OutputChoice, RestartAudio,
+    picker, save_config,
+};
 
 pub struct PanelPlugin;
 
@@ -38,6 +41,7 @@ fn egui_color(color: Color) -> egui::Color32 {
     )
 }
 
+#[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par ressource
 fn draw_panel(
     mut contexts: EguiContexts,
     visible: Res<PanelVisible>,
@@ -45,6 +49,8 @@ fn draw_panel(
     snapshot: Res<LastSnapshot>,
     midi: Res<MidiRes>,
     mut zoom: ResMut<WaveZoom>,
+    mut settings: ResMut<AudioSettings>,
+    mut restart: ResMut<RestartAudio>,
     load_tx: Res<LoadSender>,
 ) -> Result {
     if !visible.0 {
@@ -80,6 +86,29 @@ fn draw_panel(
                 picker::open(engine::Deck::B, load_tx.tx.clone(), load_tx.sample_rate);
             }
         });
+
+        ui.separator();
+        ui.heading("Sortie audio");
+        // Bascule à chaud : le moteur redémarre et la session est
+        // réhydratée (pistes, positions, mix) — cf. apply_restart.
+        let before = settings.output;
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut settings.output,
+                OutputChoice::Controller,
+                "Contrôleur (master + casque)",
+            );
+            ui.radio_value(
+                &mut settings.output,
+                OutputChoice::System,
+                "Sortie du PC (stéréo)",
+            );
+        });
+        if settings.output != before {
+            restart.requested = true;
+            restart.retries_left = 0;
+            save_config(&settings);
+        }
 
         ui.separator();
         ui.heading("Diagnostics");

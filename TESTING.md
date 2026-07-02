@@ -18,8 +18,12 @@ audio-probe` dumps what every alias accepts).
       fallback
 - [ ] Status bar shows **@ 44100 Hz, buffer 256** on the MK2 (not 48000 /
       1114 — that would mean the plug alias won, cf. docs/latency.md)
-- [ ] Unplug/replug the controller mid-session: automatic reconnection,
-      no crash (M3+)
+- [ ] Unplug/replug the controller mid-session: MIDI reconnects AND the
+      audio stream rebuilds on the controller card — tracks, positions,
+      playback and mix survive the restart (no crash, M3+)
+- [ ] F12 → "Sortie audio": switch to "Sortie du PC" (stereo on the
+      default device) and back to "Contrôleur" (4 channels) — session
+      rehydrated each time, choice persisted in ober.config.ron
 
 ## M1 — Audio engine (keyboard)
 
