@@ -189,3 +189,32 @@ fn scratch_arriere_borne_au_debut_de_piste() {
     let last = *positions.last().unwrap();
     assert_eq!(last, 0, "position clampée au début de piste : {last}");
 }
+
+#[test]
+fn backward_scratch_reenters_a_finished_track() {
+    let (mut graph, mut ports) = setup(1.0);
+    ports.commands.push(EngineCommand::Play(Deck::A)).unwrap();
+
+    // Play past the end: the deck stops, the position clamps at the end —
+    // the record stays on the platter.
+    let positions = run_with_ticks(&mut graph, &mut ports, 200, 0);
+    let end = *positions.last().unwrap();
+    assert_eq!(end, u64::from(PREFERRED_SAMPLE_RATE), "clamped at the end");
+    assert!(
+        !ports.snapshots.read().decks[0].playing,
+        "stopped at the end"
+    );
+
+    // Grab the platter and pull backward: sound comes back, the position
+    // re-enters the track (vinyl semantics).
+    ports
+        .commands
+        .push(EngineCommand::JogTouch(Deck::A, true))
+        .unwrap();
+    let positions = run_with_ticks(&mut graph, &mut ports, 100, -12);
+    let last = *positions.last().unwrap();
+    assert!(
+        last < u64::from(PREFERRED_SAMPLE_RATE) - 2 * BLOCK as u64,
+        "backward scratch re-entered the track: {last}"
+    );
+}

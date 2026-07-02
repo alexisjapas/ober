@@ -420,16 +420,29 @@ impl AudioGraph {
     }
 }
 
-/// Lecture d'une frame à position fractionnaire, interpolation Hermite
-/// 4 points (specs §3.3/§3.5). Avance `position` de `speed` (négatif en
-/// scratch arrière, clampé au début de piste). `None` en fin de piste.
-/// Les voisins hors bornes sont clampés aux extrémités.
+/// Reads one frame at a fractional position, 4-point Hermite interpolation
+/// (specs §3.3/§3.5). Advances `position` by `speed` (negative while
+/// scratching backward), clamped to the track bounds. Out-of-range
+/// neighbors are clamped to the edges.
+///
+/// `None` only when at the end going forward: playback stops there, but the
+/// position stays clamped on the track so a backward scratch or seek
+/// re-enters it — vinyl semantics, the record never leaves the deck.
 #[inline]
 fn varispeed_frame(track: &TrackBuffer, position: &mut f64, speed: f64) -> Option<(f32, f32)> {
     let total = track.frames();
-    let idx = *position as usize;
-    if idx >= total {
+    if total == 0 {
         return None;
+    }
+    let mut idx = *position as usize;
+    if idx >= total {
+        if speed >= 0.0 {
+            *position = total as f64;
+            return None;
+        }
+        // Backward from the end: re-enter on the last frame.
+        idx = total - 1;
+        *position = idx as f64;
     }
     let t = (*position - idx as f64) as f32;
     let neighbor = |offset: isize| -> (f32, f32) {
@@ -440,7 +453,7 @@ fn varispeed_frame(track: &TrackBuffer, position: &mut f64, speed: f64) -> Optio
     let (l0, r0) = neighbor(0);
     let (l1, r1) = neighbor(1);
     let (l2, r2) = neighbor(2);
-    *position = (*position + speed).max(0.0);
+    *position = (*position + speed).clamp(0.0, total as f64);
     Some((hermite4(lm1, l0, l1, l2, t), hermite4(rm1, r0, r1, r2, t)))
 }
 
