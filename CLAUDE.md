@@ -12,7 +12,7 @@ Everything goes through the nix flake (`cargo` does not exist outside the
 devShell):
 
 ```sh
-nix develop -c cargo test --workspace                        # 60 tests
+nix develop -c cargo test --workspace                        # 63 tests
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo fmt --all
 nix develop -c ./scripts/check-bevy-boundary.sh              # Bevy boundary
