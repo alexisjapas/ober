@@ -4,15 +4,16 @@
 
 use std::sync::Arc;
 
-use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, SAMPLE_RATE, TrackBuffer};
+use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, PREFERRED_SAMPLE_RATE, TrackBuffer};
 
 const BLOCK_FRAMES: usize = 256;
 
 fn sine_track(freq: f32, seconds: f32, amplitude: f32) -> Arc<TrackBuffer> {
-    let frames = (seconds * SAMPLE_RATE as f32) as usize;
+    let frames = (seconds * PREFERRED_SAMPLE_RATE as f32) as usize;
     let mut samples = Vec::with_capacity(frames * CHANNELS);
     for i in 0..frames {
-        let s = amplitude * (std::f32::consts::TAU * freq * i as f32 / SAMPLE_RATE as f32).sin();
+        let s = amplitude
+            * (std::f32::consts::TAU * freq * i as f32 / PREFERRED_SAMPLE_RATE as f32).sin();
         samples.push(s);
         samples.push(s);
     }
@@ -35,7 +36,7 @@ fn write_wav_if_asked(name: &str, samples: &[f32]) {
     }
     let spec = hound::WavSpec {
         channels: CHANNELS as u16,
-        sample_rate: SAMPLE_RATE,
+        sample_rate: PREFERRED_SAMPLE_RATE,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
@@ -64,7 +65,10 @@ fn mix_2_decks_au_centre() {
     cmds.push(EngineCommand::Play(Deck::A)).unwrap();
     cmds.push(EngineCommand::Play(Deck::B)).unwrap();
 
-    let rendered = render(&mut graph, SAMPLE_RATE as usize / 2 / BLOCK_FRAMES);
+    let rendered = render(
+        &mut graph,
+        PREFERRED_SAMPLE_RATE as usize / 2 / BLOCK_FRAMES,
+    );
     graph.publish_snapshot();
     write_wav_if_asked("offline_mix_2decks", &rendered);
 

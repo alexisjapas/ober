@@ -74,10 +74,10 @@ fn draw_panel(
         ui.horizontal(|ui| {
             ui.label("Dialogue système (rfd) :");
             if ui.button("→ deck A").clicked() {
-                picker::open(engine::Deck::A, load_tx.0.clone());
+                picker::open(engine::Deck::A, load_tx.tx.clone(), load_tx.sample_rate);
             }
             if ui.button("→ deck B").clicked() {
-                picker::open(engine::Deck::B, load_tx.0.clone());
+                picker::open(engine::Deck::B, load_tx.tx.clone(), load_tx.sample_rate);
             }
         });
 

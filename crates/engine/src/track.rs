@@ -10,7 +10,8 @@ use std::sync::Arc;
 use crate::CHANNELS;
 
 pub struct TrackBuffer {
-    /// f32 stéréo entrelacé à 48 kHz (sortie de la crate `decode`).
+    /// Interleaved stereo f32 at the engine's stream rate (`decode` output —
+    /// the buffer itself is rate-agnostic, positions are in frames).
     samples: Vec<f32>,
 }
 
@@ -25,10 +26,6 @@ impl TrackBuffer {
 
     pub fn frames(&self) -> usize {
         self.samples.len() / CHANNELS
-    }
-
-    pub fn duration_seconds(&self) -> f64 {
-        self.frames() as f64 / f64::from(crate::SAMPLE_RATE)
     }
 
     /// Frame stéréo (gauche, droite). `idx` doit être < `frames()`.

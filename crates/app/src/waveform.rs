@@ -20,8 +20,8 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{Material2d, Material2dPlugin};
 
+use crate::StreamInfoRes;
 use analysis::{WaveformPoint, WaveformSummary};
-use engine::SAMPLE_RATE;
 
 use crate::theme;
 use crate::{Decks, LastSnapshot};
@@ -222,8 +222,10 @@ fn zoom_input(
 
 /// À chaque (re)chargement de piste ou arrivée de l'analyse : upload des
 /// textures mipmap (une fois) et mise à jour du beatgrid.
+#[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par ressource
 fn sync_tracks(
     decks: Res<Decks>,
+    stream: Res<StreamInfoRes>,
     mut waveforms: ResMut<WaveformEntities>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -233,6 +235,7 @@ fn sync_tracks(
     if !decks.is_changed() {
         return;
     }
+    let sample_rate = f64::from(stream.0.sample_rate);
     for (i, slot) in decks.tracks.iter().enumerate() {
         let Some(loaded) = slot else { continue };
         if loaded.summary.low.is_empty() {
@@ -242,7 +245,7 @@ fn sync_tracks(
 
         // Beatgrid (l'analyse arrive après le chargement, specs §4.2).
         let (first_beat, beat_period) = loaded.analysis.as_ref().map_or((-1.0, 0.0), |a| {
-            let period = 60.0 / a.bpm * f64::from(SAMPLE_RATE) / track_frames;
+            let period = 60.0 / a.bpm * sample_rate / track_frames;
             (
                 (a.first_beat_sample as f64 / track_frames) as f32,
                 period as f32,
@@ -321,11 +324,13 @@ fn sync_tracks(
 fn update_playheads(
     time: Res<Time>,
     snapshot: Res<LastSnapshot>,
+    stream: Res<StreamInfoRes>,
     zoom: Res<WaveZoom>,
     mut waveforms: ResMut<WaveformEntities>,
     mut materials: ResMut<Assets<WaveformMaterial>>,
 ) {
     let dt = f64::from(time.delta_secs());
+    let sample_rate = f64::from(stream.0.sample_rate);
     for (i, slot) in waveforms.decks.iter_mut().enumerate() {
         let Some(wf) = slot else { continue };
         if wf.track_frames <= 0.0 {
@@ -336,15 +341,15 @@ fn update_playheads(
 
         // Extrapolation à la vitesse publiée + correction douce, sans snap
         // (specs §6.1). Un seek (écart > 1 s) rattrape immédiatement.
-        wf.display_pos += snap.speed * dt * f64::from(SAMPLE_RATE);
-        if (target - wf.display_pos).abs() > f64::from(SAMPLE_RATE) {
+        wf.display_pos += snap.speed * dt * sample_rate;
+        if (target - wf.display_pos).abs() > sample_rate {
             wf.display_pos = target;
         } else {
             let alpha = 1.0 - (-dt / CORRECTION_TAU).exp();
             wf.display_pos += (target - wf.display_pos) * alpha;
         }
 
-        let window = (zoom.seconds * f64::from(SAMPLE_RATE) / wf.track_frames).min(1.0);
+        let window = (zoom.seconds * sample_rate / wf.track_frames).min(1.0);
 
         // Niveau de mipmap : ~points de niveau 0 par pixel affiché.
         let visible_points = window * wf.mip_points[0] as f64;

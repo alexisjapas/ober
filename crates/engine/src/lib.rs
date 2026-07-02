@@ -30,12 +30,19 @@ pub mod track;
 pub use command::{EngineCommand, JogParams};
 pub use dsp::EqBand;
 pub use graph::{AudioGraph, EnginePorts};
+pub use jog::JogRuntime;
 pub use snapshot::{DeckSnapshot, EngineSnapshot};
 pub use stream::{Engine, EngineConfig, EngineError, StreamInfo};
 pub use track::TrackBuffer;
 
-/// Format interne : f32, 48 kHz, stéréo entrelacé (specs §3.1).
-pub const SAMPLE_RATE: u32 = 48_000;
+/// Preferred sample rate (specs §3.1: f32, interleaved stereo, 48 kHz). The
+/// engine actually runs at the rate of the output stream it managed to open:
+/// 44.1 kHz-only devices (e.g. the DJControl Inpulse 200 MK2) are driven at
+/// their native rate to avoid the ALSA plug resampler and its ~23 ms buffer
+/// (cf. docs/latency.md). Everything downstream — decode target, EQ
+/// coefficients, jog model, seek conversions — derives from
+/// [`StreamInfo::sample_rate`], never from this constant.
+pub const PREFERRED_SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
 /// Taille de buffer cible en frames (specs §3.1 : 128–256). Clampée à la
 /// plage supportée par le périphérique (le fallback 512 en découle).

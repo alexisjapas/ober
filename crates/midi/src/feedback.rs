@@ -17,13 +17,17 @@ pub struct FeedbackEngine {
     bindings: Vec<FeedbackBinding>,
     /// Dernière donnée émise par binding (None = jamais envoyée).
     last_sent: Vec<Option<u8>>,
+    /// Rate of the opened output stream — snapshot positions are in samples
+    /// at this rate (end-of-track threshold).
+    sample_rate: u32,
 }
 
 impl FeedbackEngine {
-    pub fn new(mapping: &Mapping) -> Self {
+    pub fn new(mapping: &Mapping, sample_rate: u32) -> Self {
         Self {
             last_sent: vec![None; mapping.feedback.len()],
             bindings: mapping.feedback.clone(),
+            sample_rate,
         }
     }
 
@@ -37,7 +41,7 @@ impl FeedbackEngine {
     /// MIDI 3 octets à émettre dans `out`.
     pub fn refresh(&mut self, snapshot: &EngineSnapshot, out: &mut Vec<[u8; 3]>) {
         for (binding, last) in self.bindings.iter().zip(self.last_sent.iter_mut()) {
-            let value = state_value(binding.state, snapshot);
+            let value = state_value(binding.state, snapshot, self.sample_rate);
             let data = match binding.scale {
                 Some(Scale::Linear(lo, hi)) => {
                     let (lo, hi) = (f32::from(lo), f32::from(hi));
@@ -68,7 +72,7 @@ fn deck_index(deck: Deck) -> usize {
 }
 
 /// Valeur 0..1 d'un état observable (binaire : 0.0 / 1.0).
-fn state_value(state: FeedbackState, snapshot: &EngineSnapshot) -> f32 {
+fn state_value(state: FeedbackState, snapshot: &EngineSnapshot, sample_rate: u32) -> f32 {
     let deck = |d: Deck| &snapshot.decks[deck_index(d)];
     match state {
         FeedbackState::Playing { deck: d } => f32::from(u8::from(deck(d).playing)),
@@ -78,7 +82,7 @@ fn state_value(state: FeedbackState, snapshot: &EngineSnapshot) -> f32 {
             let snap = deck(d);
             let near_end = snap.track_frames > 0
                 && (snap.track_frames.saturating_sub(snap.position_samples) as f64)
-                    < END_OF_TRACK_SECONDS * f64::from(engine::SAMPLE_RATE);
+                    < END_OF_TRACK_SECONDS * f64::from(sample_rate);
             f32::from(u8::from(near_end))
         }
         FeedbackState::VuMaster => (snapshot.master_rms[0] + snapshot.master_rms[1]) * 0.5,
@@ -114,7 +118,7 @@ mod tests {
                 bend_return_ms: 150.0,
             },
         };
-        FeedbackEngine::new(&mapping)
+        FeedbackEngine::new(&mapping, 48_000)
     }
 
     #[test]

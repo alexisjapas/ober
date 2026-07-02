@@ -44,6 +44,8 @@ struct Route {
     engine: MappingEngine,
     commands: rtrb::Producer<EngineCommand>,
     events: crossbeam_channel::Sender<ControlEvent>,
+    /// Rate of the opened output stream — scales seek/EQ conversions.
+    sample_rate: u32,
 }
 
 /// Poignée du sous-système MIDI. Au drop : arrêt du thread et fermeture des
@@ -56,13 +58,15 @@ pub struct MidiIo {
 impl MidiIo {
     /// Démarre le thread MIDI. `commands` est le producteur du ring dédié
     /// (`EnginePorts::midi_commands`) ; `snapshots` reçoit les copies
-    /// d'état relayées par l'app pour le feedback LED.
+    /// d'état relayées par l'app pour le feedback LED. `sample_rate` is the
+    /// rate of the opened output stream (`StreamInfo::sample_rate`).
     pub fn spawn(
         mapping: Mapping,
         commands: rtrb::Producer<EngineCommand>,
         events: crossbeam_channel::Sender<ControlEvent>,
         status: crossbeam_channel::Sender<MidiStatus>,
         snapshots: crossbeam_channel::Receiver<EngineSnapshot>,
+        sample_rate: u32,
     ) -> std::io::Result<Self> {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -75,6 +79,7 @@ impl MidiIo {
                     &status,
                     &snapshots,
                     &shutdown_rx,
+                    sample_rate,
                 )
             })?;
         Ok(Self {
@@ -93,6 +98,7 @@ impl Drop for MidiIo {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn midi_thread(
     mapping: &Mapping,
     commands: rtrb::Producer<EngineCommand>,
@@ -100,19 +106,24 @@ fn midi_thread(
     status: &crossbeam_channel::Sender<MidiStatus>,
     snapshots: &crossbeam_channel::Receiver<EngineSnapshot>,
     shutdown: &mpsc::Receiver<()>,
+    sample_rate: u32,
 ) {
     let mut commands = commands;
-    // Les paramètres du modèle de jog viennent du mapping (specs §3.5).
-    let _ = commands.push(EngineCommand::SetJogParams(crate::route::jog_params(
-        &mapping.jog,
+    // Jog model parameters come from the mapping (specs §3.5); the
+    // per-sample coefficients are derived here, outside the callback, with
+    // the stream's rate (Rule 5).
+    let _ = commands.push(EngineCommand::SetJogParams(engine::JogRuntime::new(
+        crate::route::jog_params(&mapping.jog),
+        sample_rate,
     )));
 
     let route = Arc::new(Mutex::new(Route {
         engine: MappingEngine::new(mapping),
         commands,
         events: events.clone(),
+        sample_rate,
     }));
-    let mut feedback = FeedbackEngine::new(mapping);
+    let mut feedback = FeedbackEngine::new(mapping, sample_rate);
     let mut input: Option<(MidiInputConnection<()>, String)> = None;
     let mut output: Option<MidiOutputConnection> = None;
     let mut last_snapshot = EngineSnapshot::default();
@@ -192,8 +203,9 @@ fn connect_input(port_name: &str, route: &Arc<Mutex<Route>>) -> Option<MidiInput
                 // Verrou jamais contendu (seul ce callback le prend) ; le
                 // thread audio n'est pas concerné — il lit son ring SPSC.
                 let Ok(mut route) = route.lock() else { return };
+                let sample_rate = route.sample_rate;
                 if let Some(event) = route.engine.translate(bytes) {
-                    if let Some(command) = to_engine_command(&event) {
+                    if let Some(command) = to_engine_command(&event, sample_rate) {
                         let _ = route.commands.push(command);
                     }
                     let _ = route.events.send(event);

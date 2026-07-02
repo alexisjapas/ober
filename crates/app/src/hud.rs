@@ -5,8 +5,6 @@
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
-use engine::SAMPLE_RATE;
-
 use crate::fonts::UiFonts;
 use crate::theme::{color, font, layout};
 use crate::{Analyzers, AudioEngine, Decks, LastSnapshot, MidiRes, MixState};
@@ -71,8 +69,8 @@ fn spawn_hud(mut commands: Commands, fonts: Res<UiFonts>) {
     ));
 }
 
-fn format_time(samples: u64) -> String {
-    let seconds = samples / u64::from(SAMPLE_RATE);
+fn format_time(samples: u64, sample_rate: u32) -> String {
+    let seconds = samples / u64::from(sample_rate);
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
@@ -104,6 +102,16 @@ fn update_texts(
     }
     *accumulator = 0.0;
 
+    let (device, sample_rate, channels, buffer) = {
+        let eng = engine.0.lock().unwrap();
+        (
+            eng.info.device_name.clone(),
+            eng.info.sample_rate,
+            eng.info.channels,
+            eng.info.buffer_frames,
+        )
+    };
+
     for (mut text, deck) in &mut deck_texts {
         let i = deck.0;
         let snap = &snapshot.0.decks[i];
@@ -118,29 +126,23 @@ fn update_texts(
         });
         let state = if snap.playing { "▶" } else { "⏸" };
         let cue = if snap.cue { "  CUE" } else { "" };
-        let remaining = format_time(snap.track_frames.saturating_sub(snap.position_samples));
+        let remaining = format_time(
+            snap.track_frames.saturating_sub(snap.position_samples),
+            sample_rate,
+        );
         text.0 = format!(
             "{label} {state}  {name}{bpm}\n{} / −{remaining}   pitch {:+.1} %   vol {:.0} %{cue}",
-            format_time(snap.position_samples),
+            format_time(snap.position_samples, sample_rate),
             mix.pitch[i] * 100.0,
             mix.volumes[i] * 100.0,
         );
     }
-
-    let (device, channels, buffer) = {
-        let eng = engine.0.lock().unwrap();
-        (
-            eng.info.device_name.clone(),
-            eng.info.channels,
-            eng.info.buffer_frames,
-        )
-    };
     let vu = analyzers.levels.map_or_else(String::new, |(_, peak)| {
         format!("   vu {:.2}", peak[0].max(peak[1]))
     });
     if let Ok(mut text) = status_texts.single_mut() {
         text.0 = format!(
-            "{device} ({channels} canaux, buffer {})   MIDI {}   xf {:+.2}   master {:.2}   casque {:.2}/mix {:.2}{vu}   underruns {}   audio {:.0} %   {:.0} fps",
+            "{device} ({channels} canaux @ {sample_rate} Hz, buffer {})   MIDI {}   xf {:+.2}   master {:.2}   casque {:.2}/mix {:.2}{vu}   underruns {}   audio {:.0} %   {:.0} fps",
             buffer.map_or("?".into(), |b| b.to_string()),
             midi.controller.as_deref().unwrap_or("—"),
             mix.crossfader,

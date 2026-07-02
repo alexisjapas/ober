@@ -9,22 +9,42 @@ Linux/ALSA with the controller.
 total latency ≈ software buffer (cpal) + device buffer(s) + DAC
 ```
 
-- **Software buffer**: `TARGET_BUFFER_FRAMES = 256` frames at 48 kHz
-  = **5.33 ms** (clamped to the range advertised by the selected
-  configuration; the effective size is logged at startup and visible in
-  `StreamInfo`).
+- **Software buffer**: `TARGET_BUFFER_FRAMES = 256` frames = **5.33 ms**
+  @ 48 kHz, **5.8 ms** @ 44.1 kHz (the effective size and rate are logged
+  at startup and visible in `StreamInfo` / the status bar).
 - **Device**: backend-dependent. Under PipeWire (ALSA layer), the quantum
   typically adds one period.
 
-**Measured on the DJControl Inpulse 200 Mk2 (raw ALSA, 2026-07)**: the card
-only accepts buffers of **1114–1115 frames** in 4 channels @ 48 kHz, i.e.
-≈ 23.2 ms of software buffer — above the 10 ms target of the specs.
-Avenues to get lower:
-- check whether PipeWire exposes the card in 4 channels with a shorter
-  quantum (then point `device_match` at that node);
-- try other sample rates (44.1 kHz) in case the range differs;
-- otherwise, document it as a hardware constraint (the specs' ≤ 10 ms goal
-  targeted "buffer + device" on hardware that allows it).
+## The MK2 case: 44.1 kHz native, solved (2026-07-02)
+
+The USB descriptor (`/proc/asound/card*/stream0`) shows the DJControl
+Inpulse 200 Mk2 supports **only 44 100 Hz** (S24_3LE, 4 channels, USB full
+speed, async endpoint). Consequences, measured with
+`cargo run -p engine --example audio-probe`:
+
+- The controller appears under **11 ALSA PCM aliases sharing the same
+  description**. The first one (`sysdefault`) goes through the `plug`
+  layer: at 48 kHz its resampler imposes **1114–1115 frames** (≈ 23.2 ms),
+  and even at 44.1 kHz it locks the buffer at 1024 frames (≈ 23.2 ms).
+  This was the historical "the MK2 imposes 1114 frames" constraint — it
+  was the alias, not the hardware.
+- The `plughw` alias at the **native 44.1 kHz** does format conversion
+  only (f32 → S24_3LE, no resampler — cpal opens with
+  `SND_PCM_NO_AUTO_RESAMPLE`, which is also why it rejects 48 kHz) and
+  honors **128/256/512-frame buffers exactly**. Raw ALSA confirms the
+  hardware range is [90, 88200] frames at 44.1 kHz.
+- PipeWire is no help here: its graph is locked at 48 kHz
+  (`clock.allowed-rates = [48000]`), so playing through it inserts its
+  resampler plus the shared quantum.
+
+The engine therefore tries, per channel count, **every matching alias at
+every candidate rate (48 kHz then 44.1 kHz) at the requested buffer size
+first**, and only then falls back to clamped/default sizes
+(`engine::stream`, `RATE_CANDIDATES`). On the MK2 this selects 4 channels
+@ 44.1 kHz with 256 frames = **5.8 ms** of software buffer — under the
+10 ms target. Decode, EQ coefficients, jog model, seeks and the UI all
+follow `StreamInfo::sample_rate`; nothing assumes 48 kHz anymore.
+`sample_rate: Some(...)` in `ober.config.ron` forces a rate if needed.
 
 ## Callback load (measured, criterion bench)
 
@@ -56,4 +76,4 @@ Recommended method, physical loopback:
 | Configuration | Software buffer | Measured latency | Date |
 |---|---|---|---|
 | PipeWire (default device) | 256 frames (5.33 ms) | _to measure_ | — |
-| Raw ALSA DJControl | _target 128–256_ | _to measure (M2)_ | — |
+| DJControl plughw 4 ch @ 44.1 kHz | 256 frames (5.8 ms) | _to measure (loopback)_ | selected 2026-07-02 |

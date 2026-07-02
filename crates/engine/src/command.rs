@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::Deck;
 use crate::dsp::{BiquadCoeffs, EqBand};
+use crate::jog::JogRuntime;
 use crate::track::TrackBuffer;
 
 /// S'étoffe à chaque jalon : jog bend/scratch au M4.
@@ -53,9 +54,11 @@ pub enum EngineCommand {
     /// (surface touchée) ou bend (bord) — est déterminé par l'état du touch
     /// côté moteur.
     JogTicks(Deck, i32),
-    /// Paramètres du modèle de jog, dérivés du mapping RON (specs §3.5 :
-    /// rien en dur dans le code). Appliqués aux deux decks.
-    SetJogParams(JogParams),
+    /// Jog model coefficients, derived outside the callback from the RON
+    /// mapping's [`JogParams`] and the stream's sample rate via
+    /// [`JogRuntime::new`] (specs §3.5: nothing hard-coded; Rule 5: commands
+    /// carry ready-to-use values). Applied to both decks.
+    SetJogParams(JogRuntime),
     /// Remplace la piste du deck par échange de pointeur, sans copie
     /// (specs §3.4). L'ancien buffer repart par le canal de récupération.
     /// Le deck est remis à zéro (position 0, lecture arrêtée).

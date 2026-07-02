@@ -115,7 +115,7 @@ impl Browser {
         if let Some(entry) = self.entries.get(self.selected)
             && !entry.is_dir
         {
-            spawn_load_worker(entry.path.clone(), deck, tx.0.clone());
+            spawn_load_worker(entry.path.clone(), deck, tx.tx.clone(), tx.sample_rate);
         }
     }
 

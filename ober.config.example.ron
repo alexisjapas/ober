@@ -7,8 +7,14 @@
 Config(
     // Case-insensitive substring of the output device name.
     device_match: Some("DJControl"),
-    // Buffer size in frames at 48 kHz (256 ≈ 5.3 ms). Clamped to the range
-    // supported by the selected configuration — the DJControl Inpulse 200 Mk2
-    // imposes e.g. 1114 frames (≈ 23 ms) in raw 4-channel ALSA.
+    // Buffer size in frames (256 ≈ 5.3 ms @ 48 kHz, ≈ 5.8 ms @ 44.1 kHz).
+    // Every matching device alias and every candidate rate is tried at this
+    // exact size first; only then does the engine fall back to clamped or
+    // default sizes (cf. docs/latency.md).
     buffer_frames: Some(256),
+    // Forces a sample rate in Hz. Unset (None): automatic — 48 kHz
+    // preferred, 44.1 kHz when it lets the device honor `buffer_frames`
+    // (the DJControl Inpulse 200 Mk2 is natively 44.1 kHz-only: at 48 kHz
+    // the ALSA resampler imposes a ~23 ms buffer).
+    sample_rate: None,
 )

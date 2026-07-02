@@ -1,6 +1,6 @@
-//! Resampling offline haute qualité vers 48 kHz : rubato, interpolation sinc
-//! (specs §4.1 — l'équivalent de l'ancien `SincFixedIn` est `Async` +
-//! `FixedAsync::Input` depuis rubato 3).
+//! High-quality offline resampling to the engine's stream rate: rubato,
+//! sinc interpolation (specs §4.1 — the equivalent of the old `SincFixedIn`
+//! is `Async` + `FixedAsync::Input` since rubato 3).
 
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
@@ -8,7 +8,7 @@ use rubato::{
     WindowFunction, calculate_cutoff,
 };
 
-use crate::{CHANNELS, DecodeError, TARGET_SAMPLE_RATE};
+use crate::{CHANNELS, DecodeError};
 
 const SINC_LEN: usize = 256;
 const CHUNK_FRAMES: usize = 4096;
@@ -17,15 +17,19 @@ fn err(e: impl std::fmt::Display) -> DecodeError {
     DecodeError::Resample(e.to_string())
 }
 
-/// Resample un buffer stéréo entrelacé de `src_rate` vers 48 kHz.
-/// Qualité haute (sinc 256 points, interpolation cubique) — c'est offline.
-pub(crate) fn resample_stereo_48k(input: &[f32], src_rate: u32) -> Result<Vec<f32>, DecodeError> {
+/// Resamples an interleaved stereo buffer from `src_rate` to `target_rate`.
+/// High quality (256-point sinc, cubic interpolation) — this is offline.
+pub(crate) fn resample_stereo(
+    input: &[f32],
+    src_rate: u32,
+    target_rate: u32,
+) -> Result<Vec<f32>, DecodeError> {
     debug_assert_eq!(input.len() % CHANNELS, 0);
     if input.is_empty() {
         return Ok(Vec::new());
     }
 
-    let ratio = f64::from(TARGET_SAMPLE_RATE) / f64::from(src_rate);
+    let ratio = f64::from(target_rate) / f64::from(src_rate);
     let params = SincInterpolationParameters {
         sinc_len: SINC_LEN,
         f_cutoff: calculate_cutoff(SINC_LEN, WindowFunction::BlackmanHarris2),
@@ -105,7 +109,7 @@ mod tests {
             input.push(s);
         }
 
-        let out = resample_stereo_48k(&input, src_rate).unwrap();
+        let out = resample_stereo(&input, src_rate, 48_000).unwrap();
         let out_frames = out.len() / CHANNELS;
         let expected = (frames as f64 * 48_000.0 / 44_100.0).round() as usize;
         assert_eq!(out_frames, expected);

@@ -4,15 +4,16 @@
 use std::sync::Arc;
 
 use engine::dsp::{EqBand, eq_coeffs};
-use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, SAMPLE_RATE, TrackBuffer};
+use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, PREFERRED_SAMPLE_RATE, TrackBuffer};
 
 const BLOCK_FRAMES: usize = 256;
 
 fn sine_track(freq: f32, seconds: f32, amplitude: f32) -> Arc<TrackBuffer> {
-    let frames = (seconds * SAMPLE_RATE as f32) as usize;
+    let frames = (seconds * PREFERRED_SAMPLE_RATE as f32) as usize;
     let mut samples = Vec::with_capacity(frames * CHANNELS);
     for i in 0..frames {
-        let s = amplitude * (std::f32::consts::TAU * freq * i as f32 / SAMPLE_RATE as f32).sin();
+        let s = amplitude
+            * (std::f32::consts::TAU * freq * i as f32 / PREFERRED_SAMPLE_RATE as f32).sin();
         samples.push(s);
         samples.push(s);
     }
@@ -42,7 +43,7 @@ fn estimate_freq(interleaved: &[f32], channels: usize, channel: usize) -> f64 {
         .windows(2)
         .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
         .count();
-    crossings as f64 / (mono.len() as f64 / f64::from(SAMPLE_RATE))
+    crossings as f64 / (mono.len() as f64 / f64::from(PREFERRED_SAMPLE_RATE))
 }
 
 fn rms(interleaved: &[f32]) -> f64 {
@@ -65,7 +66,7 @@ fn varispeed_transpose_la_frequence() {
     cmds.push(EngineCommand::SetPitch(Deck::A, 1.10)).unwrap();
     cmds.push(EngineCommand::Play(Deck::A)).unwrap();
 
-    let blocks = SAMPLE_RATE as usize / BLOCK_FRAMES; // ~1 s
+    let blocks = PREFERRED_SAMPLE_RATE as usize / BLOCK_FRAMES; // ~1 s
     let rendered = render(&mut graph, blocks, 2);
     graph.publish_snapshot();
 
@@ -99,12 +100,12 @@ fn eq_kill_des_basses_suit_la_reponse_theorique() {
             cmds.push(EngineCommand::SetEq(
                 Deck::A,
                 EqBand::Low,
-                eq_coeffs(EqBand::Low, db, f64::from(SAMPLE_RATE)),
+                eq_coeffs(EqBand::Low, db, f64::from(PREFERRED_SAMPLE_RATE)),
             ))
             .unwrap();
         }
         cmds.push(EngineCommand::Play(Deck::A)).unwrap();
-        let rendered = render(&mut graph, SAMPLE_RATE as usize / BLOCK_FRAMES, 2);
+        let rendered = render(&mut graph, PREFERRED_SAMPLE_RATE as usize / BLOCK_FRAMES, 2);
         // Ignore le transitoire d'installation du filtre.
         rms(&rendered[9_600..])
     };
@@ -113,8 +114,8 @@ fn eq_kill_des_basses_suit_la_reponse_theorique() {
     let killed = render_60hz(Some(-26.0));
     let measured_db = 20.0 * (killed / flat).log10();
     let expected_db = 20.0
-        * eq_coeffs(EqBand::Low, -26.0, f64::from(SAMPLE_RATE))
-            .magnitude_at(60.0, f64::from(SAMPLE_RATE))
+        * eq_coeffs(EqBand::Low, -26.0, f64::from(PREFERRED_SAMPLE_RATE))
+            .magnitude_at(60.0, f64::from(PREFERRED_SAMPLE_RATE))
             .log10();
     assert!(
         (measured_db - expected_db).abs() < 1.0,

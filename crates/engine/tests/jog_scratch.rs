@@ -3,16 +3,19 @@
 //! ici on vérifie la mécanique : suivi de vélocité, absence de sauts,
 //! rampe de relâchement, scratch arrière borné au début de piste.
 
-use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, EnginePorts, SAMPLE_RATE, TrackBuffer};
+use engine::{
+    AudioGraph, CHANNELS, Deck, EngineCommand, EnginePorts, PREFERRED_SAMPLE_RATE, TrackBuffer,
+};
 
 const BLOCK: usize = 256;
 
 fn setup(seconds: f32) -> (AudioGraph, EnginePorts) {
     let (mut graph, mut ports) = AudioGraph::new();
-    let frames = (seconds * SAMPLE_RATE as f32) as usize;
+    let frames = (seconds * PREFERRED_SAMPLE_RATE as f32) as usize;
     let mut samples = Vec::with_capacity(frames * CHANNELS);
     for i in 0..frames {
-        let s = 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / SAMPLE_RATE as f32).sin();
+        let s =
+            0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / PREFERRED_SAMPLE_RATE as f32).sin();
         samples.push(s);
         samples.push(s);
     }

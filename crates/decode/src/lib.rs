@@ -1,7 +1,8 @@
-//! Décodage audio offline : symphonia (MP3, FLAC, WAV, OGG Vorbis, AAC/M4A)
-//! puis resampling rubato vers le format interne f32 48 kHz stéréo entrelacé
-//! (specs §4.1). Tourne dans un thread worker, jamais dans le callback audio.
-//! Aucune dépendance Bevy.
+//! Offline audio decoding: symphonia (MP3, FLAC, WAV, OGG Vorbis, AAC/M4A)
+//! then rubato resampling to the engine's interleaved stereo f32 format at
+//! the rate of the opened output stream (specs §4.1 — 48 kHz preferred,
+//! 44.1 kHz on natively 44.1-only devices, cf. docs/latency.md). Runs in a
+//! worker thread, never in the audio callback. No Bevy dependency.
 
 mod resample;
 
@@ -15,15 +16,20 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-/// Tout fichier est resamplé vers ce taux au décodage (specs §3.1).
+/// Preferred decode target (specs §3.1). The actual target follows the
+/// opened output stream — callers pass `StreamInfo::sample_rate` to
+/// [`decode_file`]; this constant is the default for offline uses (tests).
 pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
 
 /// Piste entièrement décodée en mémoire (POC : pistes ≤ 15 min, specs §3.4 —
 /// le streaming par chunks est une évolution v0.2).
 pub struct DecodedTrack {
-    /// f32 stéréo entrelacé à 48 kHz. Mono dupliqué sur les deux canaux.
+    /// Interleaved stereo f32 at `sample_rate`. Mono duplicated on both
+    /// channels.
     pub samples: Vec<f32>,
+    /// Rate the track was resampled to (the engine's stream rate).
+    pub sample_rate: u32,
     /// Vrai si le fichier était tronqué ou corrompu en cours de flux : on
     /// garde ce qui a été décodé et on le signale à l'UI (specs §4.1).
     pub truncated: bool,
@@ -35,7 +41,7 @@ impl DecodedTrack {
     }
 
     pub fn duration_seconds(&self) -> f64 {
-        self.frames() as f64 / f64::from(TARGET_SAMPLE_RATE)
+        self.frames() as f64 / f64::from(self.sample_rate)
     }
 }
 
@@ -53,10 +59,11 @@ pub enum DecodeError {
     Resample(String),
 }
 
-/// Décode l'intégralité du fichier en mémoire, puis resample vers 48 kHz si
-/// nécessaire. Un fichier tronqué produit une piste partielle signalée par
-/// `truncated`, jamais une erreur (tant qu'au moins un paquet a été décodé).
-pub fn decode_file(path: &Path) -> Result<DecodedTrack, DecodeError> {
+/// Decodes the whole file in memory, then resamples to `target_rate` (the
+/// engine's stream rate) when needed. A truncated file yields a partial
+/// track flagged by `truncated`, never an error (as long as at least one
+/// packet was decoded).
+pub fn decode_file(path: &Path, target_rate: u32) -> Result<DecodedTrack, DecodeError> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -137,13 +144,17 @@ pub fn decode_file(path: &Path) -> Result<DecodedTrack, DecodeError> {
     }
 
     let stereo = to_stereo(src, src_channels);
-    let samples = if src_rate == TARGET_SAMPLE_RATE {
+    let samples = if src_rate == target_rate {
         stereo
     } else {
-        resample::resample_stereo_48k(&stereo, src_rate)?
+        resample::resample_stereo(&stereo, src_rate, target_rate)?
     };
 
-    Ok(DecodedTrack { samples, truncated })
+    Ok(DecodedTrack {
+        samples,
+        sample_rate: target_rate,
+        truncated,
+    })
 }
 
 /// Mono → duplication sur les deux canaux ; multicanal → deux premiers

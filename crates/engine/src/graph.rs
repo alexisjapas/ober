@@ -381,7 +381,7 @@ impl AudioGraph {
                     deck.jog.set_touched(touched, current, &jog_rt);
                 }
                 EngineCommand::JogTicks(d, ticks) => self.deck_mut(d).jog.add_ticks(ticks),
-                EngineCommand::SetJogParams(params) => self.jog_runtime = params.into(),
+                EngineCommand::SetJogParams(runtime) => self.jog_runtime = runtime,
                 EngineCommand::SetCueEnabled(d, on) => self.deck_mut(d).cue = on,
                 EngineCommand::SetCueMix(x) => self.cue_mix = x.clamp(0.0, 1.0),
                 EngineCommand::SetHeadphoneGain(g) => {

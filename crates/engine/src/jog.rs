@@ -16,11 +16,12 @@
 //! Tous les paramètres viennent du mapping RON via
 //! [`EngineCommand::SetJogParams`](crate::command::EngineCommand).
 
-use crate::SAMPLE_RATE;
+use crate::PREFERRED_SAMPLE_RATE;
 use crate::command::JogParams;
 
-/// Coefficients par sample, précalculés à la réception des paramètres
-/// (quelques transcendantes, hors du chemin par-frame).
+/// Per-sample coefficients, precomputed **outside** the audio callback from
+/// [`JogParams`] and the sample rate of the opened stream (Rule 5: commands
+/// carry ready-to-use values, like EQ coefficients).
 #[derive(Debug, Clone, Copy)]
 pub struct JogRuntime {
     touch_scratch: bool,
@@ -34,9 +35,10 @@ pub struct JogRuntime {
     bend_sensitivity: f64,
 }
 
-impl From<JogParams> for JogRuntime {
-    fn from(p: JogParams) -> Self {
-        let fs = f64::from(SAMPLE_RATE);
+impl JogRuntime {
+    /// Derives the per-sample coefficients for the given stream rate.
+    pub fn new(p: JogParams, sample_rate: u32) -> Self {
+        let fs = f64::from(sample_rate);
         let window_samples = (p.velocity_window * fs).max(1.0);
         Self {
             touch_scratch: p.touch_scratch,
@@ -53,7 +55,7 @@ impl From<JogParams> for JogRuntime {
 
 impl Default for JogRuntime {
     fn default() -> Self {
-        JogParams::default().into()
+        Self::new(JogParams::default(), PREFERRED_SAMPLE_RATE)
     }
 }
 

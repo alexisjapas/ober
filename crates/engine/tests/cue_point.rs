@@ -3,13 +3,15 @@
 
 use std::sync::Arc;
 
-use engine::{AudioGraph, CHANNELS, Deck, EngineCommand, EnginePorts, SAMPLE_RATE, TrackBuffer};
+use engine::{
+    AudioGraph, CHANNELS, Deck, EngineCommand, EnginePorts, PREFERRED_SAMPLE_RATE, TrackBuffer,
+};
 
 const BLOCK: usize = 256;
 
 fn setup() -> (AudioGraph, EnginePorts, Arc<TrackBuffer>) {
     let (mut graph, mut ports) = AudioGraph::new();
-    let frames = SAMPLE_RATE as usize; // 1 s
+    let frames = PREFERRED_SAMPLE_RATE as usize; // 1 s
     let track = TrackBuffer::new(vec![0.1f32; frames * CHANNELS]);
     ports
         .commands

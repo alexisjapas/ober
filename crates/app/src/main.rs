@@ -59,7 +59,7 @@ mod widgets;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, SAMPLE_RATE, TrackBuffer};
+use engine::{Deck, Engine, EngineCommand, EngineConfig, EngineSnapshot, TrackBuffer};
 use midi::{ControlEvent, ControlValue, MidiIo, MidiStatus};
 
 /// Résolution de l'overview waveform (specs §4.2 : ~1000 points/s).
@@ -116,6 +116,10 @@ struct AppConfig {
     /// automatique "DJControl" puis périphérique par défaut.
     device_match: Option<String>,
     buffer_frames: Option<u32>,
+    /// Forces a sample rate (Hz). Absent → automatic: 48 kHz preferred,
+    /// 44.1 kHz when it lets the device honor the requested buffer
+    /// (docs/latency.md).
+    sample_rate: Option<u32>,
 }
 
 impl AppConfig {
@@ -141,6 +145,13 @@ impl AppConfig {
 /// jamais sur le chemin audio.
 #[derive(Resource)]
 struct AudioEngine(Mutex<Engine>);
+
+/// Copy of the stream parameters chosen at engine start (device, rate,
+/// channels — specs §3.2). UI systems read the sample rate here instead of
+/// locking the engine: every sample↔second conversion uses the rate of the
+/// opened stream, never a constant (docs/latency.md).
+#[derive(Resource, Clone)]
+pub struct StreamInfoRes(pub engine::StreamInfo);
 
 /// Messages des workers de chargement. La piste est jouable dès `Loaded` ;
 /// l'analyse BPM/beatgrid arrive ensuite, asynchrone (specs §4.2).
@@ -217,7 +228,11 @@ impl Default for MixState {
 /// Émetteur vers les workers de chargement, conservé pour le file picker
 /// (bouton Load, action MIDI, touches F/L).
 #[derive(Resource)]
-struct LoadSender(Sender<WorkerMsg>);
+struct LoadSender {
+    tx: Sender<WorkerMsg>,
+    /// Decode target = rate of the opened stream (specs §4.1).
+    sample_rate: u32,
+}
 
 #[derive(Resource, Default)]
 struct LastSnapshot(EngineSnapshot);
@@ -279,6 +294,7 @@ fn setup(mut commands: Commands) {
     let engine_config = EngineConfig {
         device_match: config.device_match,
         buffer_frames: config.buffer_frames.unwrap_or(engine::TARGET_BUFFER_FRAMES),
+        sample_rate: config.sample_rate,
     };
     // Pas de panic dans un système Bevy (démontage sale) : erreur claire
     // puis sortie propre.
@@ -321,7 +337,7 @@ fn setup(mut commands: Commands) {
         info!("aucune piste en argument — usage : ober <piste_a> [piste_b]");
     }
     for (i, path) in paths.into_iter().enumerate() {
-        spawn_load_worker(path, Deck::ALL[i], tx.clone());
+        spawn_load_worker(path, Deck::ALL[i], tx.clone(), engine.info.sample_rate);
     }
 
     // Thread MIDI : chemin court vers le moteur (ring SPSC dédié) + copie
@@ -338,6 +354,7 @@ fn setup(mut commands: Commands) {
             midi_events_tx,
             midi_status_tx,
             snapshot_rx,
+            engine.info.sample_rate,
         )
         .inspect_err(|e| error!("thread MIDI : {e}"))
         .ok()
@@ -359,7 +376,11 @@ fn setup(mut commands: Commands) {
         levels: None,
     });
 
-    commands.insert_resource(LoadSender(tx));
+    commands.insert_resource(LoadSender {
+        tx,
+        sample_rate: engine.info.sample_rate,
+    });
+    commands.insert_resource(StreamInfoRes(engine.info.clone()));
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
     commands.insert_resource(DecodeInbox(Mutex::new(rx)));
     commands.insert_resource(Decks::default());
@@ -374,7 +395,13 @@ fn setup(mut commands: Commands) {
 
 /// Récupère les pistes décodées par les workers et les installe dans le
 /// moteur par échange de pointeur (specs §3.4).
-fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: ResMut<Decks>) {
+fn poll_decoded(
+    inbox: Res<DecodeInbox>,
+    engine: Res<AudioEngine>,
+    stream: Res<StreamInfoRes>,
+    mut decks: ResMut<Decks>,
+) {
+    let sample_rate = f64::from(stream.0.sample_rate);
     let rx = inbox.0.lock().unwrap();
     while let Ok(msg) = rx.try_recv() {
         match msg {
@@ -392,7 +419,7 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
                     "deck {:?} : « {} » chargée ({:.1} s)",
                     deck,
                     name,
-                    buffer.duration_seconds()
+                    buffer.frames() as f64 / sample_rate
                 );
                 decks.tracks[deck.index()] = Some(LoadedTrack {
                     name,
@@ -420,7 +447,7 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
                             "deck {:?} : {:.2} BPM, premier beat à {:.2} s",
                             deck,
                             a.bpm,
-                            a.first_beat_sample as f64 / f64::from(SAMPLE_RATE)
+                            a.first_beat_sample as f64 / sample_rate
                         ),
                         None => info!("deck {deck:?} : tempo non détecté"),
                     }
@@ -433,20 +460,21 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
 
 /// Worker de chargement : décode, calcule le summary 3 bandes, livre la
 /// piste jouable puis l'analyse BPM/beatgrid en asynchrone (specs §4.2).
-/// Utilisé par le chargement CLI et par le file picker.
-fn spawn_load_worker(path: PathBuf, deck: Deck, tx: Sender<WorkerMsg>) {
+/// Utilisé par le chargement CLI et par le file picker. `sample_rate` is
+/// the decode target — the rate of the opened stream (specs §4.1).
+fn spawn_load_worker(path: PathBuf, deck: Deck, tx: Sender<WorkerMsg>, sample_rate: u32) {
     std::thread::Builder::new()
         .name(format!("decode-{deck:?}"))
         .spawn(move || {
             let name = path
                 .file_name()
                 .map_or_else(|| path.display().to_string(), |n| n.display().to_string());
-            match decode::decode_file(&path) {
+            match decode::decode_file(&path, sample_rate) {
                 Ok(track) => {
                     let truncated = track.truncated;
                     let summary = analysis::compute_summary(
                         &track.samples,
-                        decode::TARGET_SAMPLE_RATE,
+                        sample_rate,
                         OVERVIEW_POINTS_PER_SECOND,
                     );
                     let buffer = TrackBuffer::new(track.samples);
@@ -459,8 +487,7 @@ fn spawn_load_worker(path: PathBuf, deck: Deck, tx: Sender<WorkerMsg>) {
                         summary,
                     });
                     // …le BPM/beatgrid arrive quand il est prêt (§4.2).
-                    let analysis =
-                        analysis::analyze_track(buffer.samples(), decode::TARGET_SAMPLE_RATE);
+                    let analysis = analysis::analyze_track(buffer.samples(), sample_rate);
                     let _ = tx.send(WorkerMsg::Analyzed { deck, analysis });
                 }
                 Err(error) => {
@@ -481,7 +508,7 @@ fn emit_control(
     value: ControlValue,
 ) {
     let event = ControlEvent { action, value };
-    if let Some(command) = midi::to_engine_command(&event) {
+    if let Some(command) = midi::to_engine_command(&event, eng.info.sample_rate) {
         let _ = eng.ports.commands.push(command);
     }
     mirror_event(&event, mix);

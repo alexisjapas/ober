@@ -6,14 +6,18 @@ before any merge touching `engine`, `midi` or `mapping`.
 
 Status: all M0→M6 code is implemented and green in CI — these checklists
 are the **remaining hardware validation** of the POC. Already verified on
-the MK2: card detection and 4-channel stream opening @ 48 kHz (imposed
-buffer 1114 frames ≈ 23 ms, cf. docs/latency.md).
+the MK2: card detection, and 4-channel stream opening @ 44.1 kHz native
+with a 256-frame buffer ≈ 5.8 ms (2026-07-02 — the card is natively
+44.1 kHz-only, cf. docs/latency.md; `cargo run -p engine --example
+audio-probe` dumps what every alias accepts).
 
 ## Prerequisites
 
 - [ ] Controller detected at launch (status bar / logs)
 - [ ] "DJControl" sound card opened in 4 channels (M2+); otherwise stereo
       fallback
+- [ ] Status bar shows **@ 44100 Hz, buffer 256** on the MK2 (not 48000 /
+      1114 — that would mean the plug alias won, cf. docs/latency.md)
 - [ ] Unplug/replug the controller mid-session: automatic reconnection,
       no crash (M3+)
 
@@ -21,9 +25,9 @@ buffer 1114 frames ≈ 23 ms, cf. docs/latency.md).
 
 - [ ] Loading 2 tracks (MP3, FLAC, WAV), play/pause/seek from the keyboard
 - [ ] Crossfader and volumes from the keyboard, no underrun reported
-- [ ] Measured latency ≤ 10 ms — method in docs/latency.md; note: the MK2
-      imposes ≈ 23 ms of buffer in raw 4-channel ALSA (improvement avenues
-      documented in the same place)
+- [ ] Measured latency ≤ 10 ms — method in docs/latency.md; the software
+      buffer is 5.8 ms on the MK2 (256 frames @ 44.1 kHz native), physical
+      loopback measurement still to run
 
 ## M2 — DSP
 

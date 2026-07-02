@@ -27,11 +27,12 @@ hardware validation ([TESTING.md](TESTING.md) checklists).
 
 ```sh
 nix develop                                   # or `direnv allow`
-cargo test --workspace                        # 60 tests
+cargo test --workspace                        # 63 tests
 cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/check-bevy-boundary.sh              # Bevy boundary (§1.4)
 cargo run -p app                              # the application (`ober` binary)
 cargo run -p midi --bin midi-probe            # MIDI reverse engineering
+cargo run -p engine --example audio-probe     # audio device/buffer probe
 cargo bench -p engine --bench callback        # real-time budget
 ```
 
@@ -47,10 +48,14 @@ All project knowledge lives in the repo: verbatim specs in
    `midi-probe` (the mapping comes from the Inpulse 200 v1 → fix
    `mappings/hercules_inpulse_200_mk2.ron`, reloaded without recompiling),
    headphone pre-listen, scratch by ear (`jog:` parameters in the RON),
-   LEDs, full session.
-2. **Latency**: the MK2 imposes 1114 frames (≈ 23 ms) in raw 4-channel ALSA
-   — explore the PipeWire node and 44.1 kHz (cf. docs/latency.md),
-   otherwise document the constraint.
+   LEDs, full session. Check the status bar shows **44100 Hz / buffer
+   256** on the MK2.
+2. ~~**Latency**~~ **solved 2026-07-02**: the MK2 is natively
+   44.1 kHz-only; the engine now tries every matching ALSA alias at
+   48 kHz then 44.1 kHz at the requested buffer size and runs at the rate
+   of the stream that won → 4 ch @ 44.1 kHz, 256 frames = 5.8 ms on the
+   MK2 (details and probe: docs/latency.md, `audio-probe`). Remaining:
+   the physical loopback measurement (TESTING.md M1).
 3. **First release**: drop the `-dev` suffix, annotated tag `v0.1.0`
    (message = changelog) — the release CI builds and publishes the three
    platforms (Rule 11).

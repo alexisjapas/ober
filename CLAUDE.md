@@ -18,6 +18,7 @@ nix develop -c cargo fmt --all
 nix develop -c ./scripts/check-bevy-boundary.sh              # Bevy boundary
 nix develop -c cargo run -p app                              # `ober` binary
 nix develop -c cargo run -p midi --bin midi-probe            # raw MIDI log
+nix develop -c cargo run -p engine --example audio-probe     # device/buffer probe
 nix develop -c cargo bench -p engine --bench callback        # RT budget
 nix develop -c cargo check -p engine --features rt-checks    # anti-alloc
 nix develop -c cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html
@@ -88,7 +89,11 @@ Bevy (app): waveform.rs (3-band shader/mipmaps/beatgrid), vu.rs, hud.rs,
   `SampleRate = u32`), Bevy 0.19 (`MessageReader`, `FontSize::Px`,
   `sprite_render::Material2d`). When in doubt check
   `~/.cargo/registry/src/`, not training memory.
-- The cpal buffer range must be read on **the exact configuration**
-  (channels/rate/format), not on the default profile — the MK2 imposes
-  1114 frames (≈ 23 ms) in 4 channels @ 48 kHz (cf. docs/latency.md).
+- cpal buffer ranges **lie**: one device shows up under many ALSA aliases
+  with the same name, and the advertised range mixes rates. Ground truth =
+  actually building the stream (`engine::stream` tries every alias × rate;
+  `audio-probe` dumps them). The MK2 is natively **44.1 kHz-only**: at
+  48 kHz the plug alias imposes 1114 frames ≈ 23 ms, at 44.1 kHz `plughw`
+  honors 256 frames ≈ 5.8 ms (docs/latency.md). The engine runs at
+  `StreamInfo::sample_rate` — never assume 48 kHz.
 - `cargo run` outside `nix develop` → `cargo: command not found`.

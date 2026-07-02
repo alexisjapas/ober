@@ -3,7 +3,7 @@
 //! l'UI recevra une copie des événements pour l'affichage.
 
 use engine::dsp::{self, EqBand};
-use engine::{Deck as EngineDeck, EngineCommand, SAMPLE_RATE};
+use engine::{Deck as EngineDeck, EngineCommand};
 use mapping::{Action, Deck};
 
 use crate::translate::{ControlEvent, ControlValue};
@@ -19,10 +19,12 @@ fn engine_deck(deck: Deck) -> EngineDeck {
     }
 }
 
-/// Traduit un événement en commande moteur. `None` pour les actions sans
-/// effet audio direct : `Load` (traitée par l'UI), `Shift` (état interne du
-/// moteur de mapping), jogs (modèle scratch/bend au M4).
-pub fn to_engine_command(event: &ControlEvent) -> Option<EngineCommand> {
+/// Translates a control event into an engine command. `sample_rate` is the
+/// rate of the opened output stream (`StreamInfo::sample_rate`): it scales
+/// seek distances and the EQ coefficients computed here, outside the
+/// callback (specs §3.3). `None` for actions with no direct audio effect:
+/// `Load` (handled by the UI), `Shift` (mapping-engine internal state).
+pub fn to_engine_command(event: &ControlEvent, sample_rate: u32) -> Option<EngineCommand> {
     use ControlValue as V;
 
     let command = match (event.action, event.value) {
@@ -40,7 +42,7 @@ pub fn to_engine_command(event: &ControlEvent) -> Option<EngineCommand> {
         // Seek relatif en secondes signées (clavier/UI, encodeurs M3+).
         (Action::Seek { deck }, V::Relative(seconds)) => EngineCommand::SeekRelative(
             engine_deck(deck),
-            i64::from(seconds) * i64::from(SAMPLE_RATE),
+            i64::from(seconds) * i64::from(sample_rate),
         ),
 
         // Mixage.
@@ -52,9 +54,9 @@ pub fn to_engine_command(event: &ControlEvent) -> Option<EngineCommand> {
 
         // EQ : la courbe du mapping produit des dB, les coefficients sont
         // calculés ici, hors callback (specs §3.3).
-        (Action::EqLow { deck }, V::Absolute(db)) => eq(deck, EqBand::Low, db),
-        (Action::EqMid { deck }, V::Absolute(db)) => eq(deck, EqBand::Mid, db),
-        (Action::EqHigh { deck }, V::Absolute(db)) => eq(deck, EqBand::High, db),
+        (Action::EqLow { deck }, V::Absolute(db)) => eq(deck, EqBand::Low, db, sample_rate),
+        (Action::EqMid { deck }, V::Absolute(db)) => eq(deck, EqBand::Mid, db, sample_rate),
+        (Action::EqHigh { deck }, V::Absolute(db)) => eq(deck, EqBand::High, db, sample_rate),
 
         // Pitch : fader 0–1 → vitesse autour de 1.0.
         (Action::Pitch { deck }, V::Absolute(v)) => EngineCommand::SetPitch(
@@ -100,11 +102,11 @@ pub fn jog_params(config: &mapping::JogConfig) -> engine::JogParams {
     }
 }
 
-fn eq(deck: Deck, band: EqBand, gain_db: f32) -> EngineCommand {
+fn eq(deck: Deck, band: EqBand, gain_db: f32, sample_rate: u32) -> EngineCommand {
     EngineCommand::SetEq(
         engine_deck(deck),
         band,
-        dsp::eq_coeffs(band, f64::from(gain_db), f64::from(SAMPLE_RATE)),
+        dsp::eq_coeffs(band, f64::from(gain_db), f64::from(sample_rate)),
     )
 }
 
@@ -112,15 +114,20 @@ fn eq(deck: Deck, band: EqBand, gain_db: f32) -> EngineCommand {
 mod tests {
     use super::*;
 
+    /// Shorthand: route at the preferred 48 kHz rate.
+    fn cmd(event: &ControlEvent) -> Option<EngineCommand> {
+        to_engine_command(event, 48_000)
+    }
+
     #[test]
     fn le_chemin_court_couvre_les_controles_critiques() {
-        let xf = to_engine_command(&ControlEvent {
+        let xf = cmd(&ControlEvent {
             action: Action::CrossFader,
             value: ControlValue::Absolute(1.0),
         });
         assert!(matches!(xf, Some(EngineCommand::SetCrossfader(v)) if (v - 1.0).abs() < 1e-6));
 
-        let pitch = to_engine_command(&ControlEvent {
+        let pitch = cmd(&ControlEvent {
             action: Action::Pitch { deck: Deck::A },
             value: ControlValue::Absolute(0.0),
         });
@@ -128,7 +135,7 @@ mod tests {
             matches!(pitch, Some(EngineCommand::SetPitch(EngineDeck::A, s)) if (s - 0.92).abs() < 1e-9)
         );
 
-        let eq_kill = to_engine_command(&ControlEvent {
+        let eq_kill = cmd(&ControlEvent {
             action: Action::EqLow { deck: Deck::B },
             value: ControlValue::Absolute(-26.0),
         });
@@ -137,14 +144,14 @@ mod tests {
             Some(EngineCommand::SetEq(EngineDeck::B, EqBand::Low, _))
         ));
 
-        let cue = to_engine_command(&ControlEvent {
+        let cue = cmd(&ControlEvent {
             action: Action::Cue { deck: Deck::A },
             value: ControlValue::Pressed(true),
         });
         assert!(matches!(cue, Some(EngineCommand::CuePress(EngineDeck::A))));
 
         // Jogs : ticks unifiés, touch transmis.
-        let tick = to_engine_command(&ControlEvent {
+        let tick = cmd(&ControlEvent {
             action: Action::JogTick { deck: Deck::A },
             value: ControlValue::Relative(-1),
         });
@@ -152,7 +159,7 @@ mod tests {
             tick,
             Some(EngineCommand::JogTicks(EngineDeck::A, -1))
         ));
-        let bend = to_engine_command(&ControlEvent {
+        let bend = cmd(&ControlEvent {
             action: Action::JogBend { deck: Deck::B },
             value: ControlValue::Relative(2),
         });
@@ -160,7 +167,7 @@ mod tests {
             bend,
             Some(EngineCommand::JogTicks(EngineDeck::B, 2))
         ));
-        let touch = to_engine_command(&ControlEvent {
+        let touch = cmd(&ControlEvent {
             action: Action::JogTouch { deck: Deck::A },
             value: ControlValue::Pressed(true),
         });
@@ -175,8 +182,23 @@ mod tests {
                 action,
                 value: ControlValue::Pressed(true),
             };
-            assert!(to_engine_command(&event).is_none(), "{action:?}");
+            assert!(cmd(&event).is_none(), "{action:?}");
         }
+    }
+
+    #[test]
+    fn le_seek_suit_la_frequence_du_stream() {
+        // A 44.1 kHz stream (native MK2 rate) must seek 44 100 samples per
+        // second, not 48 000 (docs/latency.md).
+        let event = ControlEvent {
+            action: Action::Seek { deck: Deck::A },
+            value: ControlValue::Relative(2),
+        };
+        let seek = to_engine_command(&event, 44_100);
+        assert!(matches!(
+            seek,
+            Some(EngineCommand::SeekRelative(EngineDeck::A, 88_200))
+        ));
     }
 
     #[test]

@@ -34,7 +34,7 @@ fn wav_44k_stereo_resample_en_48k() {
     let path = tmp_path("44k-stereo.wav");
     write_wav(&path, 44_100, 2, 0.5, 440.0);
 
-    let track = decode_file(&path).expect("décodage");
+    let track = decode_file(&path, TARGET_SAMPLE_RATE).expect("décodage");
     let _ = std::fs::remove_file(&path);
 
     assert!(!track.truncated);
@@ -54,7 +54,7 @@ fn wav_mono_duplique_en_stereo() {
     let path = tmp_path("48k-mono.wav");
     write_wav(&path, 48_000, 1, 0.2, 220.0);
 
-    let track = decode_file(&path).expect("décodage");
+    let track = decode_file(&path, TARGET_SAMPLE_RATE).expect("décodage");
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(track.samples.len() % CHANNELS, 0);
@@ -68,7 +68,7 @@ fn fichier_non_audio_est_une_erreur() {
     let path = tmp_path("garbage.bin");
     std::fs::write(&path, [0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0x42]).unwrap();
 
-    let result = decode_file(&path);
+    let result = decode_file(&path, TARGET_SAMPLE_RATE);
     let _ = std::fs::remove_file(&path);
     assert!(result.is_err());
 }
