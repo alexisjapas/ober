@@ -23,8 +23,9 @@ latence totale ≈ buffer logiciel (cpal) + buffer(s) du périphérique + DAC
 
 - **M1** (mix simple, stéréo) : ≈ 665 ns / bloc, ~0,03 % du budget de 2,67 ms.
 - **M2** (chaîne complète : varispeed Hermite, EQ 3 bandes, cue, limiteur,
-  sortie 4 canaux) : **≈ 6,6 µs / bloc**, soit ~0,25 % du budget
-  (budget specs : < 20 %). Marge très large pour la suite.
+  sortie 4 canaux) : ≈ 6,6 µs / bloc, ~0,25 % du budget.
+- **M4** (+ modèle de jog par frame) : **≈ 7,9 µs / bloc**, soit ~0,3 % du
+  budget (budget specs : < 20 %). Marge très large pour la suite.
 
 Le snapshot expose `callback_load` (lissé) et `underruns` en continu dans la
 barre d'état (titre de fenêtre au M1).

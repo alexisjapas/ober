@@ -49,11 +49,24 @@ première génération via Mixxx — corriger `mappings/*.ron` si écart).
 - [ ] Jogs : les messages arrivent (log/debug) — le scratch lui-même : M4
 - [ ] Latence perçue fader → son : imperceptible (chemin court §5.1)
 
-## M4 — Jogs (à détailler au jalon)
+## M4 — Jogs
 
-- [ ] Bend : correction de tempo douce, retour progressif
-- [ ] Scratch : suivi précis, pas de son "escalier", rampe de relâchement propre
-- [ ] Comparaison A/B avec Mixxx sur le même matériel
+Les paramètres du modèle vivent dans `mappings/*.ron` (section `jog:`) —
+itérer à l'oreille sans recompiler (le fichier local prime sur l'embarqué).
+
+- [ ] `ticks_per_rev` réel du MK2 confirmé au midi-probe (un tour complet
+      de jog = combien de ticks 0x0A ?)
+- [ ] Scratch : la piste suit le doigt sans traîner ni osciller ; aucun son
+      « escalier » à rotation lente ; aller-retour rapide propre
+- [ ] Prise en main d'un deck en lecture : freinage naturel (pas de coupure)
+- [ ] Relâchement : reprise de la lecture en ~100 ms sans à-coup ;
+      sur deck à l'arrêt : glissement qui s'éteint en douceur
+- [ ] Scratch arrière jusqu'au début de piste : butée propre, pas de crash
+- [ ] Bend (bord, deck en lecture) : correction de tempo douce dans les deux
+      sens, retour progressif à l'arrêt de la rotation
+- [ ] Comparaison A/B avec Mixxx sur le même matériel ; ajuster
+      `bend_sensitivity`, `velocity_window_ms`, `scratch_smoothing_ms`,
+      `release_ramp_ms` puis reporter les valeurs retenues dans le RON embarqué
 
 ## M5 — Feedback (à détailler au jalon)
 

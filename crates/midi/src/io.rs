@@ -84,6 +84,12 @@ fn midi_thread(
     status: &crossbeam_channel::Sender<MidiStatus>,
     shutdown: &mpsc::Receiver<()>,
 ) {
+    let mut commands = commands;
+    // Les paramètres du modèle de jog viennent du mapping (specs §3.5).
+    let _ = commands.push(EngineCommand::SetJogParams(crate::route::jog_params(
+        &mapping.jog,
+    )));
+
     let route = Arc::new(Mutex::new(Route {
         engine: MappingEngine::new(mapping),
         commands,

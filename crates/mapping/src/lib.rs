@@ -177,13 +177,40 @@ pub struct ControlBinding {
 }
 
 /// Paramètres du modèle de jog (specs §3.5) — vivent dans le mapping,
-/// jamais en dur dans le code.
+/// jamais en dur dans le code. Les champs optionnels ont des valeurs par
+/// défaut raisonnables, ajustables à l'oreille contrôleur en main.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JogConfig {
     pub ticks_per_rev: u32,
     pub touch_scratch: bool,
     pub bend_sensitivity: f32,
+    /// Rampe de retour à la vitesse nominale au relâchement (50–200 ms).
     pub release_ramp_ms: u32,
+    /// Vitesse nominale du plateau virtuel (vinyle : 33⅓ tr/min).
+    #[serde(default = "default_platter_rpm")]
+    pub platter_rpm: f32,
+    /// Fenêtre glissante d'estimation de vélocité (10–20 ms).
+    #[serde(default = "default_velocity_window_ms")]
+    pub velocity_window_ms: f32,
+    /// Constante de temps de l'asservissement scratch (~5 ms).
+    #[serde(default = "default_scratch_smoothing_ms")]
+    pub scratch_smoothing_ms: f32,
+    /// Constante de temps du retour progressif du bend.
+    #[serde(default = "default_bend_return_ms")]
+    pub bend_return_ms: f32,
+}
+
+fn default_platter_rpm() -> f32 {
+    100.0 / 3.0 // 33⅓
+}
+fn default_velocity_window_ms() -> f32 {
+    15.0
+}
+fn default_scratch_smoothing_ms() -> f32 {
+    5.0
+}
+fn default_bend_return_ms() -> f32 {
+    150.0
 }
 
 /// Mapping complet d'un contrôleur. Le schéma `feedback` (LEDs, VU) est

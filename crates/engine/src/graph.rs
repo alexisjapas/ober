@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::command::EngineCommand;
 use crate::dsp::{StereoEq, hermite4, soft_clip};
+use crate::jog::{JogRuntime, JogState};
 use crate::snapshot::EngineSnapshot;
 use crate::track::TrackBuffer;
 use crate::{CHANNELS, Deck, MAX_BLOCK_FRAMES, MAX_PITCH_RATIO};
@@ -55,6 +56,10 @@ struct DeckState {
     cue: bool,
     volume: f32,
     eq: StereoEq,
+    jog: JogState,
+    /// Vitesse effective de la dernière frame traitée (pour le snapshot et
+    /// la continuité du scratch à la prise en main).
+    last_speed: f64,
 }
 
 impl Default for DeckState {
@@ -69,12 +74,15 @@ impl Default for DeckState {
             cue: false,
             volume: 1.0,
             eq: StereoEq::default(),
+            jog: JogState::default(),
+            last_speed: 0.0,
         }
     }
 }
 
 pub struct AudioGraph {
     decks: [DeckState; 2],
+    jog_runtime: JogRuntime,
     crossfader: f32,
     master_gain: f32,
     /// Balance casque : 0.0 = cue seul, 1.0 = master seul.
@@ -109,6 +117,7 @@ impl AudioGraph {
 
         let graph = Self {
             decks: [DeckState::default(), DeckState::default()],
+            jog_runtime: JogRuntime::default(),
             crossfader: 0.0,
             master_gain: 1.0,
             cue_mix: 0.5,
@@ -164,23 +173,32 @@ impl AudioGraph {
         cue.fill(0.0);
 
         let xf = crossfader_gains(self.crossfader);
+        let jog_rt = self.jog_runtime;
 
         let decks = &mut self.decks;
         let deck_snapshots = &mut self.snapshot.decks;
         for ((deck, snap), xf_gain) in decks.iter_mut().zip(deck_snapshots.iter_mut()).zip(xf) {
             let mut sum_sq = [0.0f32; 2];
             let mut peak = [0.0f32; 2];
+            let mut last_speed = 0.0f64;
 
+            // Le jog peut imposer du son sur un deck à l'arrêt (scratch,
+            // rampe de relâchement) — specs §3.5.
             if let Some(track) = deck.track.as_ref()
-                && deck.playing
+                && (deck.playing || deck.jog.engaged(&jog_rt))
             {
                 let gain = deck.volume;
+                let nominal = if deck.playing { deck.speed } else { 0.0 };
                 for i in 0..frames {
-                    let Some((l, r)) = varispeed_frame(track, &mut deck.position, deck.speed)
-                    else {
+                    let speed = deck.jog.effective_speed(nominal, &jog_rt);
+                    if speed == 0.0 {
+                        continue; // plateau tenu immobile : silence
+                    }
+                    let Some((l, r)) = varispeed_frame(track, &mut deck.position, speed) else {
                         deck.playing = false;
                         break;
                     };
+                    last_speed = speed;
                     // EQ 3 bandes puis gain deck (chaîne §3.3).
                     let dl = deck.eq.process(0, l) * gain;
                     let dr = deck.eq.process(1, r) * gain;
@@ -198,6 +216,7 @@ impl AudioGraph {
                     peak[1] = peak[1].max(mr.abs());
                 }
             }
+            deck.last_speed = last_speed;
 
             let n = frames.max(1) as f32;
             snap.playing = deck.playing;
@@ -205,7 +224,7 @@ impl AudioGraph {
             snap.position_samples = deck.position as u64;
             snap.cue_point_samples = deck.cue_point as u64;
             snap.track_frames = deck.track.as_ref().map_or(0, |t| t.frames() as u64);
-            snap.speed = if deck.playing { deck.speed } else { 0.0 };
+            snap.speed = deck.last_speed;
             snap.rms = [(sum_sq[0] / n).sqrt(), (sum_sq[1] / n).sqrt()];
             snap.peak = peak;
         }
@@ -343,6 +362,21 @@ impl AudioGraph {
                 EngineCommand::SetEq(d, band, coeffs) => {
                     self.deck_mut(d).eq.set_band(band, coeffs);
                 }
+                EngineCommand::JogTouch(d, touched) => {
+                    let jog_rt = self.jog_runtime;
+                    let deck = self.deck_mut(d);
+                    // Continuité : le freinage démarre de la vitesse réelle.
+                    let current = if deck.last_speed != 0.0 {
+                        deck.last_speed
+                    } else if deck.playing {
+                        deck.speed
+                    } else {
+                        0.0
+                    };
+                    deck.jog.set_touched(touched, current, &jog_rt);
+                }
+                EngineCommand::JogTicks(d, ticks) => self.deck_mut(d).jog.add_ticks(ticks),
+                EngineCommand::SetJogParams(params) => self.jog_runtime = params.into(),
                 EngineCommand::SetCueEnabled(d, on) => self.deck_mut(d).cue = on,
                 EngineCommand::SetCueMix(x) => self.cue_mix = x.clamp(0.0, 1.0),
                 EngineCommand::SetHeadphoneGain(g) => {
@@ -382,8 +416,9 @@ impl AudioGraph {
 }
 
 /// Lecture d'une frame à position fractionnaire, interpolation Hermite
-/// 4 points (specs §3.3/§3.5). Avance `position` de `speed`. `None` en fin
-/// de piste. Les voisins hors bornes sont clampés aux extrémités.
+/// 4 points (specs §3.3/§3.5). Avance `position` de `speed` (négatif en
+/// scratch arrière, clampé au début de piste). `None` en fin de piste.
+/// Les voisins hors bornes sont clampés aux extrémités.
 #[inline]
 fn varispeed_frame(track: &TrackBuffer, position: &mut f64, speed: f64) -> Option<(f32, f32)> {
     let total = track.frames();
@@ -400,7 +435,7 @@ fn varispeed_frame(track: &TrackBuffer, position: &mut f64, speed: f64) -> Optio
     let (l0, r0) = neighbor(0);
     let (l1, r1) = neighbor(1);
     let (l2, r2) = neighbor(2);
-    *position += speed;
+    *position = (*position + speed).max(0.0);
     Some((hermite4(lm1, l0, l1, l2, t), hermite4(rm1, r0, r1, r2, t)))
 }
 

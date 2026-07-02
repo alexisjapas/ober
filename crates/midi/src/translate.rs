@@ -175,6 +175,19 @@ mod tests {
         MappingEngine::new(&mapping)
     }
 
+    fn jog_defaults() -> mapping::JogConfig {
+        mapping::JogConfig {
+            ticks_per_rev: 720,
+            touch_scratch: true,
+            bend_sensitivity: 0.3,
+            release_ramp_ms: 100,
+            platter_rpm: 100.0 / 3.0,
+            velocity_window_ms: 15.0,
+            scratch_smoothing_ms: 5.0,
+            bend_return_ms: 150.0,
+        }
+    }
+
     #[test]
     fn table_hercules_transport_et_mixage() {
         let mut engine = hercules();
@@ -289,12 +302,7 @@ mod tests {
                     },
                 },
             ],
-            jog: mapping::JogConfig {
-                ticks_per_rev: 720,
-                touch_scratch: true,
-                bend_sensitivity: 0.3,
-                release_ramp_ms: 100,
-            },
+            jog: jog_defaults(),
         };
         let mut engine = MappingEngine::new(&mapping);
 
@@ -340,12 +348,7 @@ mod tests {
                     encoding: RelativeEncoding::SignedBit,
                 },
             }],
-            jog: mapping::JogConfig {
-                ticks_per_rev: 720,
-                touch_scratch: true,
-                bend_sensitivity: 0.3,
-                release_ramp_ms: 100,
-            },
+            jog: jog_defaults(),
         };
         let mut engine = MappingEngine::new(&mapping);
         assert_eq!(

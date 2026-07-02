@@ -22,11 +22,12 @@
 pub mod command;
 pub mod dsp;
 pub mod graph;
+pub mod jog;
 pub mod snapshot;
 pub mod stream;
 pub mod track;
 
-pub use command::EngineCommand;
+pub use command::{EngineCommand, JogParams};
 pub use dsp::EqBand;
 pub use graph::{AudioGraph, EnginePorts};
 pub use snapshot::{DeckSnapshot, EngineSnapshot};

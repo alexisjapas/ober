@@ -63,10 +63,35 @@ pub fn to_engine_command(event: &ControlEvent) -> Option<EngineCommand> {
         (Action::CueMix, V::Absolute(v)) => EngineCommand::SetCueMix(v),
         (Action::HeadphoneGain, V::Absolute(v)) => EngineCommand::SetHeadphoneGain(v),
 
-        // UI (Load), état interne (Shift), jogs (M4).
+        // Jogs (specs §3.5) : le moteur choisit scratch ou bend selon le
+        // touch — les deux CC (bord/surface) portent les mêmes ticks.
+        (Action::JogTouch { deck }, V::Pressed(on)) => {
+            EngineCommand::JogTouch(engine_deck(deck), on)
+        }
+        (Action::JogTick { deck } | Action::JogBend { deck }, V::Relative(n)) => {
+            EngineCommand::JogTicks(engine_deck(deck), n)
+        }
+
+        // UI (Load), état interne (Shift).
         _ => return None,
     };
     Some(command)
+}
+
+/// Convertit les paramètres de jog du mapping RON (unités « humaines ») en
+/// paramètres moteur (SI). Envoyé au moteur à l'initialisation du thread
+/// MIDI — rien n'est codé en dur (specs §3.5).
+pub fn jog_params(config: &mapping::JogConfig) -> engine::JogParams {
+    engine::JogParams {
+        ticks_per_rev: f64::from(config.ticks_per_rev),
+        touch_scratch: config.touch_scratch,
+        bend_sensitivity: f64::from(config.bend_sensitivity),
+        release_ramp: f64::from(config.release_ramp_ms) / 1000.0,
+        platter_rev_per_s: f64::from(config.platter_rpm) / 60.0,
+        velocity_window: f64::from(config.velocity_window_ms) / 1000.0,
+        scratch_smoothing: f64::from(config.scratch_smoothing_ms) / 1000.0,
+        bend_return: f64::from(config.bend_return_ms) / 1000.0,
+    }
 }
 
 fn eq(deck: Deck, band: EqBand, gain_db: f32) -> EngineCommand {
@@ -112,19 +137,52 @@ mod tests {
         });
         assert!(matches!(cue, Some(EngineCommand::CuePress(EngineDeck::A))));
 
-        // Sans effet moteur : Load, Shift, jogs (M4).
-        for action in [
-            Action::Load { deck: Deck::A },
-            Action::Shift,
-            Action::JogTick { deck: Deck::A },
-            Action::JogBend { deck: Deck::A },
-            Action::JogTouch { deck: Deck::A },
-        ] {
+        // Jogs : ticks unifiés, touch transmis.
+        let tick = to_engine_command(&ControlEvent {
+            action: Action::JogTick { deck: Deck::A },
+            value: ControlValue::Relative(-1),
+        });
+        assert!(matches!(
+            tick,
+            Some(EngineCommand::JogTicks(EngineDeck::A, -1))
+        ));
+        let bend = to_engine_command(&ControlEvent {
+            action: Action::JogBend { deck: Deck::B },
+            value: ControlValue::Relative(2),
+        });
+        assert!(matches!(
+            bend,
+            Some(EngineCommand::JogTicks(EngineDeck::B, 2))
+        ));
+        let touch = to_engine_command(&ControlEvent {
+            action: Action::JogTouch { deck: Deck::A },
+            value: ControlValue::Pressed(true),
+        });
+        assert!(matches!(
+            touch,
+            Some(EngineCommand::JogTouch(EngineDeck::A, true))
+        ));
+
+        // Sans effet moteur : Load, Shift.
+        for action in [Action::Load { deck: Deck::A }, Action::Shift] {
             let event = ControlEvent {
                 action,
-                value: ControlValue::Relative(1),
+                value: ControlValue::Pressed(true),
             };
             assert!(to_engine_command(&event).is_none(), "{action:?}");
         }
+    }
+
+    #[test]
+    fn les_parametres_de_jog_viennent_du_mapping() {
+        let mapping: mapping::Mapping =
+            include_str!("../../../mappings/hercules_inpulse_200_mk2.ron")
+                .parse()
+                .unwrap();
+        let params = jog_params(&mapping.jog);
+        assert_eq!(params.ticks_per_rev, 720.0);
+        assert!(params.touch_scratch);
+        assert!((params.release_ramp - 0.1).abs() < 1e-9);
+        assert!((params.platter_rev_per_s - 100.0 / 180.0).abs() < 1e-6);
     }
 }

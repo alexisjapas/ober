@@ -45,10 +45,54 @@ pub enum EngineCommand {
     SetCueMix(f32),
     /// Gain casque linéaire, clampé à `[0, 2]`.
     SetHeadphoneGain(f32),
+    /// Touch capacitif du jog pressé/relâché (specs §3.5).
+    JogTouch(Deck, bool),
+    /// Ticks relatifs de rotation du jog (crans signés). Le mode — scratch
+    /// (surface touchée) ou bend (bord) — est déterminé par l'état du touch
+    /// côté moteur.
+    JogTicks(Deck, i32),
+    /// Paramètres du modèle de jog, dérivés du mapping RON (specs §3.5 :
+    /// rien en dur dans le code). Appliqués aux deux decks.
+    SetJogParams(JogParams),
     /// Remplace la piste du deck par échange de pointeur, sans copie
     /// (specs §3.4). L'ancien buffer repart par le canal de récupération.
     /// Le deck est remis à zéro (position 0, lecture arrêtée).
     SwapTrackBuffer(Deck, Arc<TrackBuffer>),
     /// Décharge la piste du deck.
     ClearTrack(Deck),
+}
+
+/// Paramètres du modèle scratch/bend (specs §3.5), unités SI. Convertis en
+/// coefficients par bloc/sample côté moteur, hors callback critique.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JogParams {
+    pub ticks_per_rev: f64,
+    /// Faux : le touch est ignoré, toute rotation est un bend.
+    pub touch_scratch: bool,
+    pub bend_sensitivity: f64,
+    /// Rampe de retour à la vitesse nominale au relâchement (s).
+    pub release_ramp: f64,
+    /// Tours/seconde nominaux du plateau virtuel (33⅓ tr/min ≈ 0,556).
+    pub platter_rev_per_s: f64,
+    /// Fenêtre glissante d'estimation de vélocité (s).
+    pub velocity_window: f64,
+    /// Constante de temps de l'asservissement scratch (s).
+    pub scratch_smoothing: f64,
+    /// Constante de temps du retour progressif du bend (s).
+    pub bend_return: f64,
+}
+
+impl Default for JogParams {
+    fn default() -> Self {
+        Self {
+            ticks_per_rev: 720.0,
+            touch_scratch: true,
+            bend_sensitivity: 0.3,
+            release_ramp: 0.1,
+            platter_rev_per_s: 100.0 / 180.0, // 33⅓ tr/min
+            velocity_window: 0.015,
+            scratch_smoothing: 0.005,
+            bend_return: 0.15,
+        }
+    }
 }

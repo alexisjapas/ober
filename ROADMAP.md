@@ -84,10 +84,13 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 
 ## M4 — Jogs
 
-- [ ] Bend (bord du jog) : offset de vitesse proportionnel à la vélocité de rotation, retour progressif à la vitesse nominale (§3.5)
-- [ ] Scratch (surface touchée) : ticks relatifs → vélocité cible (fenêtre glissante 10–20 ms) → asservissement de la vitesse par passe-bas (τ ≈ 5 ms) ; rampe de relâchement 50–200 ms configurable (§3.5)
-- [ ] Tous les paramètres (sensibilité, ticks/tour, courbes) dans le mapping RON — rien en dur (§3.5)
-- [ ] Itérations à l'oreille sur le matériel, comparaison avec Mixxx (§9)
+- [x] Bend (bord du jog) : offset proportionnel à la vélocité estimée, retour progressif (passe-bas vers 0, τ configurable), inerte sur un deck à l'arrêt (§3.5)
+- [x] Scratch (surface touchée) : ticks → vélocité cible par fenêtre glissante (15 ms), asservissement passe-bas (τ = 5 ms), prise en main qui freine depuis la vitesse courante, scratch possible deck à l'arrêt, position clampée au début de piste (§3.5)
+- [x] Rampe de relâchement linéaire vers la vitesse nominale (100 ms par défaut, 50–200 configurable) — nominale = 0 si le deck est en pause (§3.5)
+- [x] Tous les paramètres dans le mapping RON (`jog:`) : ticks/tour, sensibilité bend, rampe, tr/min du plateau virtuel, fenêtre de vélocité, constantes de lissage — envoyés au moteur par `SetJogParams`, rien en dur (§3.5)
+- [x] Tests : convergence du scratch vers la vélocité du jog, absence de sauts entre blocs (anti « escalier »), rampe de relâchement, bend proportionnel puis retour, scratch arrière borné, unités mapping→moteur
+- [x] Bench chaîne complète avec jog : ~7,9 µs / bloc de 128 frames (~0,3 % du budget)
+- [ ] **Itérations à l'oreille sur le matériel**, comparaison A/B avec Mixxx — ajuster `jog:` dans le RON (sensibilité, fenêtres, rampes) (§9)
 
 **Sortie** : scratch propre à l'oreille, pas d'artefacts (pas de son "escalier").
 
