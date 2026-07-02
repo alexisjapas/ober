@@ -56,24 +56,28 @@ pub struct MidiIo {
 }
 
 impl MidiIo {
-    /// Démarre le thread MIDI. `commands` est le producteur du ring dédié
+    /// Démarre le thread MIDI. `mappings`: every known controller mapping —
+    /// the thread connects to the first one whose `device_match` matches an
+    /// available port, and switches when another supported controller
+    /// replaces it. `commands` est le producteur du ring dédié
     /// (`EnginePorts::midi_commands`) ; `snapshots` reçoit les copies
     /// d'état relayées par l'app pour le feedback LED. `sample_rate` is the
     /// rate of the opened output stream (`StreamInfo::sample_rate`).
     pub fn spawn(
-        mapping: Mapping,
+        mappings: Vec<Mapping>,
         commands: rtrb::Producer<EngineCommand>,
         events: crossbeam_channel::Sender<ControlEvent>,
         status: crossbeam_channel::Sender<MidiStatus>,
         snapshots: crossbeam_channel::Receiver<EngineSnapshot>,
         sample_rate: u32,
     ) -> std::io::Result<Self> {
+        assert!(!mappings.is_empty(), "au moins un mapping");
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("ober-midi".into())
             .spawn(move || {
                 midi_thread(
-                    &mapping,
+                    &mappings,
                     commands,
                     &events,
                     &status,
@@ -100,7 +104,7 @@ impl Drop for MidiIo {
 
 #[allow(clippy::too_many_arguments)]
 fn midi_thread(
-    mapping: &Mapping,
+    mappings: &[Mapping],
     commands: rtrb::Producer<EngineCommand>,
     events: &crossbeam_channel::Sender<ControlEvent>,
     status: &crossbeam_channel::Sender<MidiStatus>,
@@ -108,22 +112,17 @@ fn midi_thread(
     shutdown: &mpsc::Receiver<()>,
     sample_rate: u32,
 ) {
-    let mut commands = commands;
-    // Jog model parameters come from the mapping (specs §3.5); the
-    // per-sample coefficients are derived here, outside the callback, with
-    // the stream's rate (Rule 5).
-    let _ = commands.push(EngineCommand::SetJogParams(engine::JogRuntime::new(
-        crate::route::jog_params(&mapping.jog),
-        sample_rate,
-    )));
-
     let route = Arc::new(Mutex::new(Route {
-        engine: MappingEngine::new(mapping),
+        engine: MappingEngine::new(&mappings[0]),
         commands,
         events: events.clone(),
         sample_rate,
     }));
-    let mut feedback = FeedbackEngine::new(mapping, sample_rate);
+    let mut feedback = FeedbackEngine::new(&mappings[0], sample_rate);
+    // Mapping actif : l'état shift/toggle du moteur de mapping survit aux
+    // reconnexions du même contrôleur ; il n'est reconstruit que quand un
+    // AUTRE contrôleur supporté prend la place.
+    let mut active: Option<usize> = None;
     let mut input: Option<(MidiInputConnection<()>, String)> = None;
     let mut output: Option<MidiOutputConnection> = None;
     let mut last_snapshot = EngineSnapshot::default();
@@ -143,10 +142,34 @@ fn midi_thread(
                 let _ = status.send(MidiStatus::Disconnected);
             }
 
+            // Premier mapping dont le `device_match` matche un port présent.
+            let matched = mappings.iter().enumerate().find_map(|(index, m)| {
+                ports
+                    .iter()
+                    .find(|p| m.matches_port(p))
+                    .map(|p| (index, p.clone()))
+            });
             if input.is_none()
-                && let Some(port_name) = ports.iter().find(|p| mapping.matches_port(p))
-                && let Some(connection) = connect_input(port_name, &route)
+                && let Some((index, port_name)) = matched
+                && let Some(connection) = connect_input(&port_name, &route)
             {
+                let mapping = &mappings[index];
+                if active != Some(index) {
+                    // Autre contrôleur : moteur de mapping, feedback et
+                    // paramètres de jog du nouveau mapping (Rule 5 : le
+                    // JogRuntime est dérivé ici, hors callback).
+                    if let Ok(mut route) = route.lock() {
+                        route.engine = MappingEngine::new(mapping);
+                        let _ = route.commands.push(EngineCommand::SetJogParams(
+                            engine::JogRuntime::new(
+                                crate::route::jog_params(&mapping.jog),
+                                sample_rate,
+                            ),
+                        ));
+                    }
+                    feedback = FeedbackEngine::new(mapping, sample_rate);
+                    active = Some(index);
+                }
                 output = connect_output(mapping);
                 if let Some(out) = output.as_mut() {
                     // Init (ex. mode « full MIDI » des LEDs Hercules).
@@ -156,7 +179,7 @@ fn midi_thread(
                 }
                 feedback.reset();
                 input = Some((connection, port_name.clone()));
-                let _ = status.send(MidiStatus::Connected(port_name.clone()));
+                let _ = status.send(MidiStatus::Connected(port_name));
             }
         }
         tick = tick.wrapping_add(1);

@@ -1,0 +1,102 @@
+// Pioneer DDJ-400 mapping.
+//
+// Primary sources: Pioneer's published "DDJ-400 MIDI Message List" via the
+// Mixxx mapping (mixxxdj/mixxx repo, res/controllers/Pioneer-DDJ-400.midi.xml
+// + its JS script) — MIDI codes are hardware facts (Cargo.toml license note).
+// EVERY CODE REMAINS TO BE VALIDATED ON THE HARDWARE with
+// `cargo run -p midi --bin midi-probe` (TESTING.md checklist).
+//
+// Controller particularities (noted in the Mixxx reference):
+// - deck A = channel 0 (0x90/0xB0), deck B = channel 1 (0x91/0xB1); the
+//   mixer section and the browser live on channel 6 (0x96/0xB6);
+// - faders/knobs are 14-bit MSB/LSB pairs — only the MSB is used for now
+//   (7-bit resolution, same policy as the Hercules pitch);
+// - jogs: CC 0x22 = rotation with touch (scratch), 0x21 = side edge
+//   (bend), note 0x36 = capacitive touch; deltas are offset-64;
+// - trim knobs (0x04) have no engine action yet (master/deck gain is
+//   volume-based in the POC) — left unmapped;
+// - tempo slider direction to confirm: swap `Linear`/`InvertedLinear` in
+//   this file (reloaded at startup without recompiling) if it moves the
+//   wrong way;
+// - Shift is a software layer here (`shift: true` bindings): unlike the
+//   Hercules, the DDJ-400 emits the same codes with Shift held for the
+//   rotary; the shifted browse push (0x96 0x42) is bound as a plain input;
+// - LEDs answer directly on the button notes — no init message needed.
+
+Mapping(
+    name: "Pioneer DDJ-400",
+    device_match: ["DDJ-400"],
+
+    init: [],
+
+    controls: [
+        // --- Transport (deck A = ch 0, deck B = ch 1) ---
+        (input: NoteOn(ch: 0, note: 0x0B), action: Play(deck: A), mode: Toggle),
+        (input: NoteOn(ch: 1, note: 0x0B), action: Play(deck: B), mode: Toggle),
+        (input: NoteOn(ch: 0, note: 0x0C), action: Cue(deck: A), mode: Momentary),
+        (input: NoteOn(ch: 1, note: 0x0C), action: Cue(deck: B), mode: Momentary),
+
+        // --- Shift (software layer) ---
+        (input: NoteOn(ch: 0, note: 0x3F), action: Shift, mode: Gate),
+        (input: NoteOn(ch: 1, note: 0x3F), action: Shift, mode: Gate),
+
+        // --- Headphone pre-listen (PFL) ---
+        (input: NoteOn(ch: 0, note: 0x54), action: HeadphoneCue(deck: A), mode: Toggle),
+        (input: NoteOn(ch: 1, note: 0x54), action: HeadphoneCue(deck: B), mode: Toggle),
+
+        // --- Library (rotary selector + LOAD buttons, ch 6) ---
+        (input: NoteOn(ch: 6, note: 0x46), action: Load(deck: A), mode: Momentary),
+        (input: NoteOn(ch: 6, note: 0x47), action: Load(deck: B), mode: Momentary),
+        (input: CC(ch: 6, cc: 0x40), action: LibraryScroll, mode: Relative(encoding: Offset64)),
+        (input: CC(ch: 6, cc: 0x40), shift: true, action: LibraryFolderScroll, mode: Relative(encoding: Offset64)),
+        (input: NoteOn(ch: 6, note: 0x41), action: LibraryEnter, mode: Momentary),
+        // Shifted browse push (hardware code) — same intent.
+        (input: NoteOn(ch: 6, note: 0x42), action: LibraryEnter, mode: Momentary),
+
+        // --- Mixing (MSBs; LSBs 0x33/0x3F ignored for now) ---
+        (input: CC(ch: 6, cc: 0x1F), action: CrossFader, mode: Absolute()),
+        (input: CC(ch: 0, cc: 0x13), action: Volume(deck: A), mode: Absolute()),
+        (input: CC(ch: 1, cc: 0x13), action: Volume(deck: B), mode: Absolute()),
+
+        // --- Headphones (cue/master mix + level, ch 6) ---
+        (input: CC(ch: 6, cc: 0x0C), action: CueMix, mode: Absolute()),
+        (input: CC(ch: 6, cc: 0x0D), action: HeadphoneGain, mode: Absolute()),
+
+        // --- EQ (3 bands) ---
+        (input: CC(ch: 0, cc: 0x0F), action: EqLow(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
+        (input: CC(ch: 0, cc: 0x0B), action: EqMid(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
+        (input: CC(ch: 0, cc: 0x07), action: EqHigh(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
+        (input: CC(ch: 1, cc: 0x0F), action: EqLow(deck: B), mode: Absolute(curve: DbLinear(-26, 6))),
+        (input: CC(ch: 1, cc: 0x0B), action: EqMid(deck: B), mode: Absolute(curve: DbLinear(-26, 6))),
+        (input: CC(ch: 1, cc: 0x07), action: EqHigh(deck: B), mode: Absolute(curve: DbLinear(-26, 6))),
+
+        // --- Tempo (MSB 0x00; direction to confirm — see header) ---
+        (input: CC(ch: 0, cc: 0x00), action: Pitch(deck: A), mode: Absolute(curve: InvertedLinear)),
+        (input: CC(ch: 1, cc: 0x00), action: Pitch(deck: B), mode: Absolute(curve: InvertedLinear)),
+
+        // --- Jogs ---
+        (input: NoteOn(ch: 0, note: 0x36), action: JogTouch(deck: A), mode: Gate),
+        (input: NoteOn(ch: 1, note: 0x36), action: JogTouch(deck: B), mode: Gate),
+        (input: CC(ch: 0, cc: 0x22), action: JogTick(deck: A), mode: Relative(encoding: Offset64)),
+        (input: CC(ch: 1, cc: 0x22), action: JogTick(deck: B), mode: Relative(encoding: Offset64)),
+        (input: CC(ch: 0, cc: 0x21), action: JogBend(deck: A), mode: Relative(encoding: Offset64)),
+        (input: CC(ch: 1, cc: 0x21), action: JogBend(deck: B), mode: Relative(encoding: Offset64)),
+    ],
+
+    // LED feedback: same notes as the buttons (Mixxx source).
+    feedback: [
+        (state: Playing(deck: A), output: NoteOn(ch: 0, note: 0x0B)),
+        (state: Playing(deck: B), output: NoteOn(ch: 1, note: 0x0B)),
+        (state: CueSet(deck: A), output: NoteOn(ch: 0, note: 0x0C)),
+        (state: CueSet(deck: B), output: NoteOn(ch: 1, note: 0x0C)),
+        (state: HeadphoneCue(deck: A), output: NoteOn(ch: 0, note: 0x54)),
+        (state: HeadphoneCue(deck: B), output: NoteOn(ch: 1, note: 0x54)),
+    ],
+
+    jog: (
+        ticks_per_rev: 720,     // Mixxx jogResolution — to validate on hardware
+        touch_scratch: true,
+        bend_sensitivity: 0.3,
+        release_ramp_ms: 100,
+    ),
+)

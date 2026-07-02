@@ -64,10 +64,11 @@ Bevy (app): waveform.rs (3-band shader/mipmaps/beatgrid), vu.rs, hud.rs,
 - Layout 100 % in window fractions: `theme::layout::bands()`.
 - WGSL shaders and fonts embedded: `crates/app/src/shaders/`, `src/fonts/`
   (`embedded://ober/...` — prefix = binary target name).
-- Controller mapping: `mappings/hercules_inpulse_200_mk2.ron` — the local
-  file overrides the embedded copy (iterate without recompiling). Code
-  reference: the Mixxx mapping of the Inpulse 200 v1, to confirm with
-  midi-probe.
+- Controller mappings: `mappings/*.ron` (Hercules Inpulse 200 MK2, Pioneer
+  DDJ-400 embedded) — a local file overrides its embedded copy, extra .ron
+  files load too; the MIDI thread picks the first mapping matching a
+  connected port. Code reference: the Mixxx mappings (hardware facts), to
+  confirm with midi-probe.
 - Runtime config: `ober.config.ron` (cf. `ober.config.example.ron`).
 
 ## Conventions

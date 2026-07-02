@@ -41,8 +41,9 @@ use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedBufferSize};
 use crate::graph::{AudioGraph, EnginePorts};
 use crate::{PREFERRED_SAMPLE_RATE, TARGET_BUFFER_FRAMES};
 
-/// Substring de détection automatique du contrôleur (specs §3.2).
-const AUTO_DETECT_MATCH: &str = "DJControl";
+/// Controller auto-detection substrings (specs §3.2): Hercules DJControl
+/// family, Pioneer DDJ family.
+const AUTO_DETECT_MATCHES: [&str; 2] = ["DJControl", "DDJ"];
 
 /// Sample rates attempted on each device, in preference order. 48 kHz is
 /// the preferred internal rate (specs §3.1); 44.1 kHz rescues natively
@@ -223,7 +224,7 @@ fn pick_devices(
             let name = device_name(&device);
             let matched = match wanted {
                 Some(pattern) => name.to_lowercase().contains(&pattern.to_lowercase()),
-                None => name.contains(AUTO_DETECT_MATCH),
+                None => AUTO_DETECT_MATCHES.iter().any(|m| name.contains(m)),
             };
             if matched {
                 matches.push((device, name));

@@ -4,6 +4,13 @@ No hardware test in CI (specs §7, CONSTITUTION-DEV Rule 8): this checklist
 is run by hand with the **Hercules DJControl Inpulse 200 MK2** plugged in,
 before any merge touching `engine`, `midi` or `mapping`.
 
+A **Pioneer DDJ-400** mapping ships too (`mappings/pioneer_ddj_400.ron`,
+codes from the Mixxx mapping): the same checklists apply on that hardware.
+DDJ-400 specifics to validate with `midi-probe`: tempo slider direction
+(swap `Linear`/`InvertedLinear` in the RON if inverted), Shift+rotary
+(software shift layer), the shifted browse push (0x96 0x42), jog
+`ticks_per_rev`, and the 4-channel card auto-detection ("DDJ").
+
 Status: all M0→M6 code is implemented and green in CI — these checklists
 are the **remaining hardware validation** of the POC. Already verified on
 the MK2: card detection, and 4-channel stream opening @ 44.1 kHz native

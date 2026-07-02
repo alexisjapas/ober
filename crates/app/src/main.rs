@@ -78,9 +78,21 @@ const CUE_MIX_PER_SECOND: f32 = 0.8;
 const HEADPHONE_PER_SECOND: f32 = 0.8;
 
 const CONFIG_PATH: &str = "ober.config.ron";
-const MAPPING_PATH: &str = "mappings/hercules_inpulse_200_mk2.ron";
-/// Mapping par défaut embarqué (surchargé par le fichier s'il est présent).
-const DEFAULT_MAPPING: &str = include_str!("../../../mappings/hercules_inpulse_200_mk2.ron");
+const MAPPINGS_DIR: &str = "mappings";
+/// Embedded controller mappings (file name, RON). A local file with the
+/// same name in `mappings/` overrides its embedded copy (iterate without
+/// recompiling); extra local `.ron` files are loaded too. The MIDI thread
+/// connects to the first mapping matching an available port.
+const DEFAULT_MAPPINGS: &[(&str, &str)] = &[
+    (
+        "hercules_inpulse_200_mk2.ron",
+        include_str!("../../../mappings/hercules_inpulse_200_mk2.ron"),
+    ),
+    (
+        "pioneer_ddj_400.ron",
+        include_str!("../../../mappings/pioneer_ddj_400.ron"),
+    ),
+];
 
 fn main() {
     App::new()
@@ -352,32 +364,51 @@ struct Analyzers {
     levels: Option<([f32; 2], [f32; 2])>,
 }
 
-/// Charge le mapping contrôleur : fichier local prioritaire (itération sans
-/// recompiler), sinon la copie embarquée. Valide avant usage (specs §5.2).
-fn load_mapping() -> Option<mapping::Mapping> {
-    let (source, text) = match std::fs::read_to_string(MAPPING_PATH) {
-        Ok(text) => (MAPPING_PATH, text),
-        Err(_) => ("mapping embarqué", DEFAULT_MAPPING.to_owned()),
-    };
-    let parsed: Result<mapping::Mapping, _> = text.parse();
-    match parsed {
-        Ok(mapping) => match mapping.validate() {
-            Ok(()) => {
-                info!("mapping « {} » chargé ({source})", mapping.name);
-                Some(mapping)
-            }
-            Err(errors) => {
-                for e in errors {
-                    error!("mapping invalide : {e}");
+/// Loads every controller mapping: local `mappings/*.ron` files first
+/// (iterate without recompiling — a file named like an embedded mapping
+/// overrides it), then the remaining embedded copies. Each candidate is
+/// validated before use (specs §5.2); invalid ones are skipped loudly.
+fn load_mappings() -> Vec<mapping::Mapping> {
+    let mut mappings = Vec::new();
+    let mut local_names: Vec<String> = Vec::new();
+    let add =
+        |source: &str, text: &str, mappings: &mut Vec<mapping::Mapping>| match text
+            .parse::<mapping::Mapping>()
+        {
+            Ok(mapping) => match mapping.validate() {
+                Ok(()) => {
+                    info!("mapping « {} » chargé ({source})", mapping.name);
+                    mappings.push(mapping);
                 }
-                None
+                Err(errors) => {
+                    for e in errors {
+                        error!("mapping invalide ({source}) : {e}");
+                    }
+                }
+            },
+            Err(e) => error!("mapping illisible ({source}) : {e}"),
+        };
+
+    if let Ok(read) = std::fs::read_dir(MAPPINGS_DIR) {
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ron") {
+                continue;
             }
-        },
-        Err(e) => {
-            error!("mapping illisible ({source}) : {e}");
-            None
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            add(&path.display().to_string(), &text, &mut mappings);
+            local_names.push(entry.file_name().display().to_string());
         }
     }
+    for (file, text) in DEFAULT_MAPPINGS {
+        if local_names.iter().any(|name| name == file) {
+            continue;
+        }
+        add(&format!("embarqué : {file}"), text, &mut mappings);
+    }
+    mappings
 }
 
 fn setup(mut commands: Commands) {
@@ -439,19 +470,22 @@ fn setup(mut commands: Commands) {
     let (midi_events_tx, midi_events_rx) = crossbeam_channel::unbounded();
     let (midi_status_tx, midi_status_rx) = crossbeam_channel::unbounded();
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
-    let midi_io = load_mapping().and_then(|mapping| {
-        let producer = engine.ports.midi_commands.take()?;
-        MidiIo::spawn(
-            mapping,
-            producer,
-            midi_events_tx,
-            midi_status_tx,
-            snapshot_rx,
-            engine.info.sample_rate,
-        )
-        .inspect_err(|e| error!("thread MIDI : {e}"))
-        .ok()
-    });
+    let mappings = load_mappings();
+    let midi_io = (!mappings.is_empty())
+        .then_some(mappings)
+        .and_then(|mappings| {
+            let producer = engine.ports.midi_commands.take()?;
+            MidiIo::spawn(
+                mappings,
+                producer,
+                midi_events_tx,
+                midi_status_tx,
+                snapshot_rx,
+                engine.info.sample_rate,
+            )
+            .inspect_err(|e| error!("thread MIDI : {e}"))
+            .ok()
+        });
     commands.insert_resource(MidiRes {
         _io: midi_io,
         events: midi_events_rx,
@@ -714,19 +748,22 @@ fn apply_restart(world: &mut World) {
     let (midi_events_tx, midi_events_rx) = crossbeam_channel::unbounded();
     let (midi_status_tx, midi_status_rx) = crossbeam_channel::unbounded();
     let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
-    let midi_io = load_mapping().and_then(|mapping| {
-        let producer = engine.ports.midi_commands.take()?;
-        MidiIo::spawn(
-            mapping,
-            producer,
-            midi_events_tx,
-            midi_status_tx,
-            snapshot_rx,
-            engine.info.sample_rate,
-        )
-        .inspect_err(|e| error!("thread MIDI : {e}"))
-        .ok()
-    });
+    let mappings = load_mappings();
+    let midi_io = (!mappings.is_empty())
+        .then_some(mappings)
+        .and_then(|mappings| {
+            let producer = engine.ports.midi_commands.take()?;
+            MidiIo::spawn(
+                mappings,
+                producer,
+                midi_events_tx,
+                midi_status_tx,
+                snapshot_rx,
+                engine.info.sample_rate,
+            )
+            .inspect_err(|e| error!("thread MIDI : {e}"))
+            .ok()
+        });
 
     resync_mix(&mut engine, &world.resource::<MixState>().clone());
 

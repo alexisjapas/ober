@@ -114,6 +114,10 @@ impl InputSpec {
 pub enum Curve {
     #[default]
     Linear,
+    /// Linear with the direction flipped (`1 − t`) — hardware whose fader
+    /// sends its maximum at the physical minimum (Pioneer tempo sliders).
+    /// Flippable in the RON file without recompiling.
+    InvertedLinear,
     /// Interpolation linéaire en dB entre (min, max).
     DbLinear(f32, f32),
 }
@@ -123,6 +127,7 @@ impl Curve {
     pub fn apply(&self, t: f32) -> f32 {
         match *self {
             Curve::Linear => t,
+            Curve::InvertedLinear => 1.0 - t,
             Curve::DbLinear(min, max) => min + t * (max - min),
         }
     }
@@ -135,6 +140,9 @@ pub enum RelativeEncoding {
     SignedBit,
     /// Complément à deux 7 bits : 0x01 = +1, 0x7F = −1 (jogs Hercules).
     TwosComplement,
+    /// Décalage 64 (jogs et encodeurs Pioneer) : 0x41 = +1, 0x3F = −1,
+    /// 0x40 = 0.
+    Offset64,
 }
 
 impl RelativeEncoding {
@@ -155,6 +163,7 @@ impl RelativeEncoding {
                     value
                 }
             }
+            RelativeEncoding::Offset64 => value - 0x40,
         }
     }
 }
@@ -436,6 +445,7 @@ mod tests {
     use super::*;
 
     const HERCULES: &str = include_str!("../../../mappings/hercules_inpulse_200_mk2.ron");
+    const DDJ_400: &str = include_str!("../../../mappings/pioneer_ddj_400.ron");
 
     #[test]
     fn le_mapping_hercules_livre_est_parseable_et_valide() {
@@ -444,6 +454,19 @@ mod tests {
         assert!(m.matches_port("DJControl Inpulse 200 MK2 MIDI 1"));
         assert!(!m.controls.is_empty());
         assert!(!m.init.is_empty(), "message d'init LEDs attendu");
+        if let Err(errors) = m.validate() {
+            panic!("mapping invalide : {errors:#?}");
+        }
+    }
+
+    #[test]
+    fn shipped_ddj_400_mapping_parses_and_validates() {
+        let m: Mapping = DDJ_400.parse().expect("mapping RON invalide");
+        assert_eq!(m.name, "Pioneer DDJ-400");
+        assert!(m.matches_port("DDJ-400 MIDI 1"));
+        assert!(!m.controls.is_empty());
+        // Software shift layer: the rotary is bound on both layers.
+        assert!(m.controls.iter().any(|c| c.shift));
         if let Err(errors) = m.validate() {
             panic!("mapping invalide : {errors:#?}");
         }
@@ -485,5 +508,14 @@ mod tests {
         assert_eq!(sb.decode(0x01), 1);
         assert_eq!(sb.decode(0x41), -1);
         assert_eq!(sb.decode(0x43), -3);
+
+        let off = RelativeEncoding::Offset64;
+        assert_eq!(off.decode(0x40), 0);
+        assert_eq!(off.decode(0x41), 1);
+        assert_eq!(off.decode(0x3F), -1);
+        assert_eq!(off.decode(0x45), 5);
+
+        assert_eq!(Curve::InvertedLinear.apply(0.0), 1.0);
+        assert_eq!(Curve::InvertedLinear.apply(1.0), 0.0);
     }
 }
