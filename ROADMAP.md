@@ -1,185 +1,191 @@
 # Roadmap — ober (POC v0.1)
 
-Référence : [docs/SPECS.md](docs/SPECS.md) (specs v0.2). Chaque jalon a un
-objectif démontrable et un **critère de sortie mesurable** ; on n'entame pas un
-jalon tant que le critère du précédent n'est pas tenu. Exception voulue : le
-*spike waveform shader* se mène en parallèle de M3–M4 (dérisquage de M6, §9).
+Reference: [docs/SPECS.md](docs/SPECS.md) (specs v0.2). Every milestone has a
+demonstrable goal and a **measurable exit criterion**; a milestone is not
+started until the previous one's criterion holds. Deliberate exception: the
+*waveform shader spike* runs in parallel with M3–M4 (M6 de-risking, §9).
 
-## Vue d'ensemble (état au 2026-07-02)
+## Overview (status as of 2026-07-02)
 
-| Jalon | Contenu | Critère de sortie | Statut |
+| Milestone | Content | Exit criterion | Status |
 |---|---|---|---|
-| **M0** | Scaffolding : workspace, flake nix, CI, squelettes de types | `cargo test` vert dans `nix develop`, CI verte | 🟡 reste `LICENSE` |
-| **M1** | Moteur audio : engine + decode, 2 decks au clavier, volume/crossfader, sortie stéréo | Mix 2 pistes sans underrun, latence mesurée ≤ 10 ms | ✅ code+CI · 🎧 latence à mesurer |
-| **M2** | DSP : EQ 3 bandes, varispeed Hermite, limiteur, cue 4 canaux | Pré-écoute casque fonctionnelle sur l'Inpulse | ✅ code+CI · stream 4 canaux **validé sur le MK2** · 🎧 écoute |
-| **M3** | MIDI in : midir, moteur de mapping RON, mapping Inpulse (hors jogs) | Tous faders/potards/boutons opérants | ✅ code+CI · 🎧 codes MK2 au midi-probe |
-| **M4** | Jogs : modèle scratch/bend à inertie | Scratch propre à l'oreille, pas d'artefacts | ✅ code+CI · 🎧 réglages à l'oreille |
-| **Spike** | Prototype waveform shader (dérisquage M6) | Architecture §6.1 validée en réel | ✅ |
-| **M5** | Feedback LED + analyse offline (BPM/beatgrid/waveform) | LEDs synchronisées, BPM ±0,1 sur corpus | ✅ code+CI (corpus ±0,1 ✓) · 🎧 LEDs |
-| **M6** | UI : waveforms shader, design system, mode idle, bibliothèque | Session de mix complète au contrôleur, frame < 8 ms | ✅ code+CI · 🎧 session complète |
+| **M0** | Scaffolding: workspace, nix flake, CI, type skeletons | `cargo test` green inside `nix develop`, green CI | 🟡 `LICENSE` remains |
+| **M1** | Audio engine: engine + decode, 2 keyboard-driven decks, volume/crossfader, stereo out | 2-track mix without underrun, measured latency ≤ 10 ms | ✅ code+CI · 🎧 latency to measure |
+| **M2** | DSP: 3-band EQ, Hermite varispeed, limiter, 4-channel cue | Working headphone pre-listen on the Inpulse | ✅ code+CI · 4-channel stream **validated on the MK2** · 🎧 listening |
+| **M3** | MIDI in: midir, RON mapping engine, Inpulse mapping (jogs aside) | Every fader/knob/button operational | ✅ code+CI · 🎧 MK2 codes via midi-probe |
+| **M4** | Jogs: inertial scratch/bend model | Clean scratch by ear, no artifacts | ✅ code+CI · 🎧 tuning by ear |
+| **Spike** | Waveform shader prototype (M6 de-risking) | §6.1 architecture validated for real | ✅ |
+| **M5** | LED feedback + offline analysis (BPM/beatgrid/waveform) | LEDs in sync, BPM ±0.1 on the corpus | ✅ code+CI (corpus ±0.1 ✓) · 🎧 LEDs |
+| **M6** | UI: shader waveforms, design system, idle mode, library | Full mix session on the controller, frame < 8 ms | ✅ code+CI · 🎧 full session |
 
-Légende : ✅ implémenté, testé, CI verte sur les 3 OS · 🎧 validation
-matérielle restante (checklists [TESTING.md](TESTING.md)).
+Legend: ✅ implemented, tested, green CI on the 3 OSes · 🎧 remaining
+hardware validation ([TESTING.md](TESTING.md) checklists).
 
 ---
 
-## Reprendre le travail (session vierge)
+## Resuming work (fresh session)
 
 ```sh
-nix develop                                   # ou `direnv allow`
+nix develop                                   # or `direnv allow`
 cargo test --workspace                        # 60 tests
 cargo clippy --workspace --all-targets -- -D warnings
-./scripts/check-bevy-boundary.sh              # frontière Bevy (§1.4)
-cargo run -p app                              # l'application (binaire `ober`)
-cargo run -p midi --bin midi-probe            # rétro-ingénierie MIDI
-cargo bench -p engine --bench callback        # budget temps réel
+./scripts/check-bevy-boundary.sh              # Bevy boundary (§1.4)
+cargo run -p app                              # the application (`ober` binary)
+cargo run -p midi --bin midi-probe            # MIDI reverse engineering
+cargo bench -p engine --bench callback        # real-time budget
 ```
 
-Toute la connaissance du projet vit dans le dépôt : specs verbatim dans
-[docs/SPECS.md](docs/SPECS.md), conventions et architecture dans
-[CLAUDE.md](CLAUDE.md), latence dans [docs/latence.md](docs/latence.md).
+All project knowledge lives in the repo: verbatim specs in
+[docs/SPECS.md](docs/SPECS.md), binding rules of work in
+[CONSTITUTION-DEV.md](CONSTITUTION-DEV.md), conventions and architecture in
+[CLAUDE.md](CLAUDE.md), latency in [docs/latency.md](docs/latency.md).
 
-**Prochaines actions, dans l'ordre :**
+**Next actions, in order:**
 
-1. **Validations matérielles** (Inpulse 200 MK2 branché) — dérouler les
-   checklists de [TESTING.md](TESTING.md) : codes MIDI réels du MK2 au
-   `midi-probe` (le mapping vient de l'Inpulse 200 v1 → corriger
-   `mappings/hercules_inpulse_200_mk2.ron`, rechargé sans recompiler),
-   pré-écoute casque, scratch à l'oreille (paramètres `jog:` du RON),
-   LEDs, session complète.
-2. **Latence** : le MK2 impose 1114 frames (≈ 23 ms) en 4 canaux ALSA brut
-   — explorer le nœud PipeWire et 44,1 kHz (cf. docs/latence.md), sinon
-   documenter la contrainte.
-3. **Licence** : confirmer GPL-3.0 et ajouter `LICENSE` (dernière case M0).
-4. **v0.2** : voir « Après le POC » en fin de document.
+1. **Hardware validation** (Inpulse 200 MK2 plugged in) — run the
+   [TESTING.md](TESTING.md) checklists: real MK2 MIDI codes via
+   `midi-probe` (the mapping comes from the Inpulse 200 v1 → fix
+   `mappings/hercules_inpulse_200_mk2.ron`, reloaded without recompiling),
+   headphone pre-listen, scratch by ear (`jog:` parameters in the RON),
+   LEDs, full session.
+2. **Latency**: the MK2 imposes 1114 frames (≈ 23 ms) in raw 4-channel ALSA
+   — explore the PipeWire node and 44.1 kHz (cf. docs/latency.md),
+   otherwise document the constraint.
+3. **License**: confirm GPL-3.0 and add `LICENSE` (last M0 box — the
+   release CI refuses to publish without it, CONSTITUTION-DEV Rule 11).
+4. **First release**: drop the `-dev` suffix, annotated tag `v0.1.0`
+   (message = changelog) — the release CI builds and publishes the three
+   platforms (Rule 11).
+5. **v0.2**: see "After the POC" at the end of this document.
 
 ---
 
 ## M0 — Scaffolding
 
-- [x] Workspace 6 crates (§2.4) ; seule `app` dépend de Bevy
-- [x] Flake nix : toolchain stable (`rust-toolchain.toml`), ALSA/Vulkan/Wayland/X11/udev, `aseqdump`
-- [x] Versions épinglées dans `[workspace.dependencies]` — Bevy en version **exacte** `=0.19.0` (§1.4)
-- [x] CI GitHub Actions : fmt, `clippy -D warnings`, tests Linux/macOS/Windows, **vérification de la frontière Bevy** (`scripts/check-bevy-boundary.sh`)
-- [x] Squelettes de types : `EngineCommand`/`EngineSnapshot`, `DecodedTrack`, `Analyzer`/`AnalysisFrame`, `Action`/`Mapping` RON
-- [x] `midi-probe` opérationnel (log hex de tous les ports d'entrée)
-- [x] `cargo test --workspace`, `clippy -D warnings`, `fmt` et frontière Bevy verts dans `nix develop` (Rust 1.96.1, Linux)
-- [x] Pousser sur un remote (github.com/alexisjapas/ober) — CI verte sur les 3 OS pour chaque commit
-- [ ] Confirmer la licence GPL-3.0 (compat mappings Mixxx) et ajouter `LICENSE`
+- [x] 6-crate workspace (§2.4); only `app` depends on Bevy
+- [x] Nix flake: stable toolchain (`rust-toolchain.toml`), ALSA/Vulkan/Wayland/X11/udev, `aseqdump`
+- [x] Versions pinned in `[workspace.dependencies]` — Bevy at the **exact** version `=0.19.0` (§1.4)
+- [x] GitHub Actions CI: fmt, `clippy -D warnings`, tests on Linux/macOS/Windows, **Bevy-boundary check** (`scripts/check-bevy-boundary.sh`)
+- [x] Type skeletons: `EngineCommand`/`EngineSnapshot`, `DecodedTrack`, `Analyzer`/`AnalysisFrame`, `Action`/`Mapping` RON
+- [x] `midi-probe` operational (hex log of every input port)
+- [x] `cargo test --workspace`, `clippy -D warnings`, `fmt` and Bevy boundary green inside `nix develop` (Rust 1.96.1, Linux)
+- [x] Pushed to a remote (github.com/alexisjapas/ober) — green CI on the 3 OSes for every commit
+- [x] Quality baseline: [CONSTITUTION-DEV.md](CONSTITUTION-DEV.md) (binding rules, Conventional Commits, semver/tag policy), release CI by annotated tag (`dist` profile, version/LICENSE guards, cargo-about third-party notices), `dist`/`profiling` cargo profiles, English as the persisted language
+- [ ] Confirm the GPL-3.0 license (Mixxx mapping compat) and add `LICENSE`
 
-## M1 — Moteur audio
+## M1 — Audio engine
 
-Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par défaut.
+Goal: mix 2 tracks from the keyboard, stereo output on the default device.
 
-- [x] `decode` : symphonia 0.6 (probe → packets) → f32 entrelacé ; rubato 3 (`Async` sinc = ex-`SincFixedIn`) → 48 kHz ; mono→stéréo ; fichiers tronqués tolérés et signalés (§4.1)
-- [x] `engine` : état de deck (buffer, position f64, gain), mixer (volumes, crossfader constant power), gain master (§3.3)
-- [x] Stream cpal stéréo, buffer cible 256 frames clampé à la plage du périphérique (fallback 512 inclus) (§3.1)
-- [x] Canaux inter-threads (§2.3) : commandes `rtrb` UI→audio ; snapshots `triple_buffer` audio→UI ; tap audio (bloc entier ou rien) ; **canal de récupération mémoire** (jamais de désallocation dans le callback, l'UI garde un clone de chaque Arc)
-- [x] `SwapTrackBuffer` par échange d'`Arc<TrackBuffer>` pré-construit, sans copie (§3.4)
-- [x] Feature `rt-checks` : allocateur traqué `assert_no_alloc` + panique sur allocation dans le callback en debug (§7)
-- [x] Instrumentation : underruns (dépassements de budget + erreurs de stream) et charge du callback lissée, dans le snapshot (§3.6)
-- [x] `app` : chargement CLI (2 pistes), workers de décodage, play/pause/seek/volumes/crossfader/master au clavier, état dans le titre de fenêtre
-- [x] Tests : rendu offline du graphe (mêmes structs, hors cpal) — 5 tests d'intégration + WAV d'écoute optionnel (`OBER_WRITE_WAV=1`) ; les WAV de non-régression « golden » attendront un DSP stabilisé (M2)
-- [x] Bench criterion : ~665 ns pour 2 decks à 128 frames, soit ~0,03 % du budget (cible < 20 %) (§7)
-- [x] Méthode de mesure de latence documentée (`docs/latence.md`) ; buffer logiciel 256 frames = 5,33 ms
-- [ ] **Validation matérielle** : session d'écoute réelle (2 pistes, aucun underrun affiché) et mesure de latence physique ≤ 10 ms — à faire sur la machine avec sortie audio active
+- [x] `decode`: symphonia 0.6 (probe → packets) → interleaved f32; rubato 3 (`Async` sinc = ex-`SincFixedIn`) → 48 kHz; mono→stereo; truncated files tolerated and reported (§4.1)
+- [x] `engine`: deck state (buffer, f64 position, gain), mixer (volumes, constant-power crossfader), master gain (§3.3)
+- [x] Stereo cpal stream, 256-frame target buffer clamped to the device range (512 fallback included) (§3.1)
+- [x] Inter-thread channels (§2.3): `rtrb` UI→audio commands; `triple_buffer` audio→UI snapshots; audio tap (whole block or nothing); **memory-reclaim channel** (never a deallocation in the callback, the UI keeps a clone of every Arc)
+- [x] `SwapTrackBuffer` by exchanging a pre-built `Arc<TrackBuffer>`, no copy (§3.4)
+- [x] `rt-checks` feature: tracked allocator `assert_no_alloc` + panic on allocation in the callback in debug (§7)
+- [x] Instrumentation: underruns (budget overruns + stream errors) and smoothed callback load, in the snapshot (§3.6)
+- [x] `app`: CLI loading (2 tracks), decode workers, play/pause/seek/volumes/crossfader/master from the keyboard, state in the window title
+- [x] Tests: offline render of the graph (same structs, no cpal) — 5 integration tests + optional listening WAV (`OBER_WRITE_WAV=1`); "golden" non-regression WAVs wait for a stabilized DSP (M2)
+- [x] Criterion bench: ~665 ns for 2 decks at 128 frames, i.e. ~0.03 % of the budget (target < 20 %) (§7)
+- [x] Latency measurement method documented (`docs/latency.md`); 256-frame software buffer = 5.33 ms
+- [ ] **Hardware validation**: real listening session (2 tracks, no underrun displayed) and physical latency measurement ≤ 10 ms — to run on the machine with active audio output
 
-**Sortie** : mix 2 pistes sans underrun, latence mesurée ≤ 10 ms.
+**Exit**: 2-track mix without underrun, measured latency ≤ 10 ms.
 
 ## M2 — DSP
 
-- [x] EQ 3 bandes biquad RBJ maison (low-shelf 250 Hz, peak 1 kHz, high-shelf 2,5 kHz), gains −26 → +6 dB ; **coefficients calculés hors callback** (`dsp::eq_coeffs`), les commandes portent les coefficients ; kill −∞ reporté au mapping M3 (§3.3)
-- [x] Varispeed ±16 % (clavier limité à ±8 %), interpolation Hermite cubique 4 points directement (pas de premier jet linéaire) (§3.3)
-- [x] Limiteur soft-clip master `tanh` (aussi appliqué au bus casque) (§3.3)
-- [x] Stream 4 canaux (1/2 master, 3/4 casque) sur périphérique matché par nom ("DJControl" auto ou `device_match` de `ober.config.ron`) ; fallback stéréo périphérique par défaut ; le 4 canaux n'est jamais tenté sur le périphérique par défaut (cartes 5.1) (§3.2)
-- [x] Cue mix casque : balance cue↔master + gain casque, tap cue post-gain deck / pré-crossfader (§3.3)
-- [x] Tests : réponse des biquads vs formule théorique (y compris filtrage temporel), Hermite, soft-clip, varispeed (fréquence transposée), kill EQ vs réponse théorique, limiteur borné, routage cue 4 canaux indépendant du crossfader (§7)
-- [x] Bench chaîne complète : ~6,6 µs / bloc de 128 frames en 4 canaux (~0,25 % du budget, cible < 20 %)
-- [ ] **Validation matérielle sur l'Inpulse** : carte détectée, stream 4 canaux ouvert (risque cpal/ALSA §9 — si échec : plan B 2 périphériques), pré-écoute au casque à l'oreille, mesure de latence physique — checklist TESTING.md
+- [x] In-house RBJ biquad 3-band EQ (low-shelf 250 Hz, peak 1 kHz, high-shelf 2.5 kHz), gains −26 → +6 dB; **coefficients computed outside the callback** (`dsp::eq_coeffs`), commands carry the coefficients; the −∞ kill deferred to the M3 mapping (§3.3)
+- [x] Varispeed ±16 % (keyboard limited to ±8 %), 4-point cubic Hermite interpolation directly (no linear first pass) (§3.3)
+- [x] Master soft-clip limiter `tanh` (also applied to the headphone bus) (§3.3)
+- [x] 4-channel stream (1/2 master, 3/4 headphones) on a name-matched device ("DJControl" auto or `device_match` from `ober.config.ron`); stereo fallback on the default device; 4 channels never attempted on the default device (5.1 cards) (§3.2)
+- [x] Headphone cue mix: cue↔master balance + headphone gain, cue tap post-deck-gain / pre-crossfader (§3.3)
+- [x] Tests: biquad response vs the theoretical formula (including time-domain filtering), Hermite, soft-clip, varispeed (transposed frequency), EQ kill vs theoretical response, bounded limiter, 4-channel cue routing independent of the crossfader (§7)
+- [x] Full-chain bench: ~6.6 µs / 128-frame block in 4 channels (~0.25 % of the budget, target < 20 %)
+- [ ] **Hardware validation on the Inpulse**: card detected, 4-channel stream opened (cpal/ALSA risk §9 — on failure: plan B, 2 devices), headphone pre-listen by ear, physical latency measurement — TESTING.md checklist
 
-**Sortie** : pré-écoute casque fonctionnelle sur l'Inpulse.
+**Exit**: working headphone pre-listen on the Inpulse.
 
 ## M3 — MIDI in
 
-- [x] Thread MIDI dédié (midir) ; hot-plug par polling (~1,5 s) : déconnexion détectée, reconnexion auto, jamais de crash au débranchement ; état shift/toggles conservé entre connexions (§5.1)
-- [x] **Chemin court** : événement traduit → `EngineCommand` poussé dans un **ring SPSC dédié** du moteur, directement depuis le callback midir ; copie de chaque événement vers Bevy pour l'affichage (§5.1)
-- [x] Schéma de mapping complet : courbes (`Linear`, `DbLinear` — sortie en dB pour l'EQ), encodages relatifs (`SignedBit`, `TwosComplement`), couche Shift avec repli sur la couche de base, champ `init` (messages bruts à la connexion) (§5.2)
-- [x] Moteur de mapping générique `InputSpec → Action` (`midi::MappingEngine`) — aucun code Hercules dans le moteur ; l'init LEDs passe par le champ déclaratif `init` (le trait `ControllerBackend` attendra un contrôleur qui exige du SysEx) (§5.2–5.3)
-- [x] Validation au chargement, erreurs lisibles cumulées : doublons (input, shift), canaux/notes hors plage, courbes invalides, `device_match` vide (§5.2)
-- [x] `mappings/hercules_inpulse_200_mk2.ron` rempli depuis le mapping Mixxx de l'Inpulse 200 : transport, cue, PFL, load, crossfader, volumes, EQ 2 bandes (pas de médium sur ce contrôleur), pitch (MSB), jogs déclarés (exploités au M4), init `0xB0 0x7F 0x7F` — **codes à confirmer sur le MK2 avec midi-probe** (§5.3)
-- [x] Cue point à sémantique vinyle dans le moteur (`CuePress`/`CueRelease` : pose/retour/pré-écoute tenue) + tests offline
-- [x] Tests : table événement→action sur le mapping Hercules livré (toggle, momentary, NoteOff/vel 0, courbes dB aux butées, jogs relatifs, messages inconnus/tronqués), couche shift générique, encodages, routage chemin court (§7)
-- [x] Checklist manuelle contrôleur détaillée dans `TESTING.md` (§7)
-- [ ] **Validation matérielle sur le MK2** : chaque contrôle de la checklist TESTING.md, correction des codes RON si écart avec l'Inpulse 200 v1
-- [x] **Spike parallèle (M3–M4)** : prototype waveform shader (dérisquage M6, §9) — `Material2d` custom + WGSL embarqué, overview min/max/RMS (`analysis::compute_overview`, ~1000 pts/s) uploadée **une fois** en texture Rgba32Float (enroulée par lignes de 4096), scroll/zoom par uniforms, position affichée **extrapolée** (`pos + vitesse × Δt`, correction douce sans snap), 2 bandes A/B avec tête de lecture fixe au centre — aucune régénération de mesh. Restes M6 : mipmaps 1×/4×/16×, 3 bandes filtrées, beatgrid, zoom molette, `theme`
+- [x] Dedicated MIDI thread (midir); hot-plug by polling (~1.5 s): disconnection detected, auto reconnection, never a crash on unplug; shift/toggle state preserved across connections (§5.1)
+- [x] **Short path**: translated event → `EngineCommand` pushed into a **dedicated SPSC ring** of the engine, directly from the midir callback; a copy of every event goes to Bevy for display (§5.1)
+- [x] Complete mapping schema: curves (`Linear`, `DbLinear` — dB output for the EQ), relative encodings (`SignedBit`, `TwosComplement`), Shift layer with fallback to the base layer, `init` field (raw messages on connection) (§5.2)
+- [x] Generic `InputSpec → Action` mapping engine (`midi::MappingEngine`) — no Hercules code in the engine; LED init goes through the declarative `init` field (the `ControllerBackend` trait waits for a controller that requires SysEx) (§5.2–5.3)
+- [x] Load-time validation, readable accumulated errors: duplicates (input, shift), out-of-range channels/notes, invalid curves, empty `device_match` (§5.2)
+- [x] `mappings/hercules_inpulse_200_mk2.ron` filled from the Mixxx mapping of the Inpulse 200: transport, cue, PFL, load, crossfader, volumes, 2-band EQ (no mid on this controller), pitch (MSB), jogs declared (consumed at M4), init `0xB0 0x7F 0x7F` — **codes to confirm on the MK2 with midi-probe** (§5.3)
+- [x] Vinyl-semantics cue point in the engine (`CuePress`/`CueRelease`: set/return/held pre-listen) + offline tests
+- [x] Tests: event→action table on the shipped Hercules mapping (toggle, momentary, NoteOff/vel 0, dB curves at the stops, relative jogs, unknown/truncated messages), generic shift layer, encodings, short-path routing (§7)
+- [x] Detailed manual controller checklist in `TESTING.md` (§7)
+- [ ] **Hardware validation on the MK2**: every control of the TESTING.md checklist, RON code fixes on any mismatch with the Inpulse 200 v1
+- [x] **Parallel spike (M3–M4)**: waveform shader prototype (M6 de-risking, §9) — custom `Material2d` + embedded WGSL, min/max/RMS overview (`analysis::compute_overview`, ~1000 pts/s) uploaded **once** as an Rgba32Float texture (wrapped in 4096-wide rows), scroll/zoom via uniforms, displayed position **extrapolated** (`pos + speed × Δt`, soft correction without snap), 2 A/B bands with a fixed centered playhead — no mesh regeneration. M6 leftovers: 1×/4×/16× mipmaps, 3 filtered bands, beatgrid, wheel zoom, `theme`
 
-**Sortie** : tous faders/potards/boutons opérants.
+**Exit**: every fader/knob/button operational.
 
 ## M4 — Jogs
 
-- [x] Bend (bord du jog) : offset proportionnel à la vélocité estimée, retour progressif (passe-bas vers 0, τ configurable), inerte sur un deck à l'arrêt (§3.5)
-- [x] Scratch (surface touchée) : ticks → vélocité cible par fenêtre glissante (15 ms), asservissement passe-bas (τ = 5 ms), prise en main qui freine depuis la vitesse courante, scratch possible deck à l'arrêt, position clampée au début de piste (§3.5)
-- [x] Rampe de relâchement linéaire vers la vitesse nominale (100 ms par défaut, 50–200 configurable) — nominale = 0 si le deck est en pause (§3.5)
-- [x] Tous les paramètres dans le mapping RON (`jog:`) : ticks/tour, sensibilité bend, rampe, tr/min du plateau virtuel, fenêtre de vélocité, constantes de lissage — envoyés au moteur par `SetJogParams`, rien en dur (§3.5)
-- [x] Tests : convergence du scratch vers la vélocité du jog, absence de sauts entre blocs (anti « escalier »), rampe de relâchement, bend proportionnel puis retour, scratch arrière borné, unités mapping→moteur
-- [x] Bench chaîne complète avec jog : ~7,9 µs / bloc de 128 frames (~0,3 % du budget)
-- [ ] **Itérations à l'oreille sur le matériel**, comparaison A/B avec Mixxx — ajuster `jog:` dans le RON (sensibilité, fenêtres, rampes) (§9)
+- [x] Bend (jog edge): offset proportional to the estimated velocity, progressive return (low-pass toward 0, configurable τ), inert on a stopped deck (§3.5)
+- [x] Scratch (touched surface): ticks → target velocity over a sliding window (15 ms), low-pass servo (τ = 5 ms), grabbing brakes from the current speed, scratch possible on a stopped deck, position clamped at track start (§3.5)
+- [x] Linear release ramp toward nominal speed (100 ms default, 50–200 configurable) — nominal = 0 if the deck is paused (§3.5)
+- [x] All parameters in the RON mapping (`jog:`): ticks/rev, bend sensitivity, ramp, virtual platter RPM, velocity window, smoothing constants — sent to the engine via `SetJogParams`, nothing hard-coded (§3.5)
+- [x] Tests: scratch convergence toward the jog velocity, no jumps between blocks (anti "staircase"), release ramp, proportional bend then return, bounded backward scratch, mapping→engine units
+- [x] Full-chain bench with jog: ~7.9 µs / 128-frame block (~0.3 % of the budget)
+- [ ] **Iterations by ear on the hardware**, A/B comparison with Mixxx — adjust `jog:` in the RON (sensitivity, windows, ramps) (§9)
 
-**Sortie** : scratch propre à l'oreille, pas d'artefacts (pas de son "escalier").
+**Exit**: clean scratch by ear, no artifacts (no "staircase" sound).
 
-## M5 — Feedback + analyse
+## M5 — Feedback + analysis
 
-- [x] Schéma RON `feedback` (états play/cue posé/PFL/fin de piste + VU continus avec `scale`, états beatmatch v0.2 réservés) + moteur générique `StateChange → MIDI out` avec diff par binding (n'émet que les changements, ~30 Hz) ; connexion MIDI OUT persistante, init LEDs à la connexion, reset au re-plug (§5.2–5.3)
-- [x] Entrées feedback du mapping Hercules : play/cue/PFL/fin de piste (mêmes notes que les boutons, source Mixxx) — pas de VU MIDI sur ce contrôleur
-- [x] BPM + beatgrid offline : flux d'énergie spectrale (rustfft 1024/hop 512, Hann) → autocorrélation 60–200 BPM avec renfort harmonique → **raffinement par repliement de phase** (précision ≫ 0,01 BPM, l'erreur s'accumule sur toute la piste) → phase par maximisation d'alignement ; grille fixe (§4.2). Raffinement futur : seuil de confiance (un signal sans transitoires produit un tempo parasite)
-- [x] Waveform summary 3 bandes (~1000 points/s, crossovers un pôle 250 Hz/2,5 kHz) — prêt pour le rendu M6 (§4.2)
-- [x] Bus d'analyseurs temps réel branché sur le tap audio (`AnalyzerBus` + `LevelsAnalyzer` RMS/peak), trames vers Bevy, niveaux dans la barre d'état (§4.2)
-- [x] Piste jouable dès la fin du décodage, BPM/beatgrid livrés ensuite (message worker asynchrone, BPM affiché dans le titre) (§4.2)
-- [x] Corpus BPM : clicks générés à 60/87,5/120/174 BPM ±0,1, phase modulaire ±43 ms, silence et pistes courtes refusés (§7) — extraits réels à ajouter quand des fixtures seront versionnées
-- [ ] **Validation matérielle** : LEDs play/cue/PFL synchronisées sur l'Inpulse (checklist TESTING.md), BPM vérifié sur de vraies pistes
+- [x] RON `feedback` schema (play/cue-set/PFL/end-of-track states + continuous VUs with `scale`, beatmatch states reserved for v0.2) + generic `StateChange → MIDI out` engine with per-binding diff (only emits changes, ~30 Hz); persistent MIDI OUT connection, LED init on connection, reset on replug (§5.2–5.3)
+- [x] Feedback entries of the Hercules mapping: play/cue/PFL/end-of-track (same notes as the buttons, Mixxx source) — no MIDI VU on this controller
+- [x] Offline BPM + beatgrid: spectral energy flux (rustfft 1024/hop 512, Hann) → 60–200 BPM autocorrelation with harmonic reinforcement → **phase-folding refinement** (precision ≫ 0.01 BPM, the error accumulates over the whole track) → phase by alignment maximization; fixed grid (§4.2). Future refinement: confidence threshold (a signal without transients produces a spurious tempo)
+- [x] 3-band waveform summary (~1000 points/s, one-pole crossovers 250 Hz/2.5 kHz) — ready for the M6 rendering (§4.2)
+- [x] Real-time analyzer bus plugged on the audio tap (`AnalyzerBus` + `LevelsAnalyzer` RMS/peak), frames to Bevy, levels in the status bar (§4.2)
+- [x] Track playable as soon as decoding ends, BPM/beatgrid delivered later (asynchronous worker message, BPM shown in the title) (§4.2)
+- [x] BPM corpus: clicks generated at 60/87.5/120/174 BPM ±0.1, modular phase ±43 ms, silence and short tracks rejected (§7) — real excerpts to add when fixtures get versioned
+- [ ] **Hardware validation**: play/cue/PFL LEDs in sync on the Inpulse (TESTING.md checklist), BPM verified on real tracks
 
-**Sortie** : LEDs synchronisées, BPM ±0,1 sur le corpus.
+**Exit**: LEDs in sync, BPM ±0.1 on the corpus.
 
 ## M6 — UI
 
-**M6a (fait)** :
+**M6a (done)**:
 
-- [x] Module `theme` : tokens de couleur sémantiques, échelle typo, espacements, courbes d'easing centralisées — consommé par tous les materials et textes ; style egui au M6b (§6.2)
-- [x] Waveforms en shader WGSL : summary **3 bandes** (teintes pondérées par l'énergie), **mipmaps 1×/4×/16×** (textures pré-décimées, échangées selon le zoom), uploadées une fois au chargement, scroll/zoom par uniforms — **aucune régénération de mesh par frame** (§6.1)
-- [x] Position affichée extrapolée (`position + vitesse × Δt`), correction douce sans snap, rattrapage sur seek (§6.1)
-- [x] Beatgrid en surimpression dans le shader (dès l'arrivée de l'analyse asynchrone), tête de lecture fixe centrée, **zoom molette** 2–180 s (§6.1/§6.3)
-- [x] VU-mètres master : quad + uniforms, zones ok/warn/clip du thème, attaque/retour lissés et peak-hold décroissant via `theme::easing` (§6.1/§6.3)
-- [x] Textes : panneau deck (titre, BPM, position/temps restant, pitch, volume, cue) + barre d'état (périph/canaux/buffer, contrôleur MIDI, mix, VU, underruns, charge audio, fps lissé) (§6.3)
-- [x] Les interactions UI (clavier) émettent les mêmes `mapping::Action` que le MIDI, routées par `midi::to_engine_command` — un seul chemin (§6.4) ; action `Seek` ajoutée
-- [x] Mode idle : 10 fps via `WinitSettings` après > 5 s sans lecture, jog ni interaction ; retour immédiat en `Continuous` ; le thread audio jamais affecté (§6.5)
-- [x] Animations basées sur le temps réel (dt), jamais sur le compteur de frames — compatible 120/144 Hz (§6.1)
+- [x] `theme` module: semantic color tokens, type scale, spacings, centralized easing curves — consumed by all materials and texts; egui styling at M6b (§6.2)
+- [x] WGSL shader waveforms: **3-band** summary (hues weighted by energy), **1×/4×/16× mipmaps** (pre-decimated textures, swapped by zoom level), uploaded once at load, scroll/zoom via uniforms — **no per-frame mesh regeneration** (§6.1)
+- [x] Displayed position extrapolated (`position + speed × Δt`), soft correction without snap, catch-up on seek (§6.1)
+- [x] Beatgrid overlaid in the shader (as soon as the async analysis lands), fixed centered playhead, **wheel zoom** 2–180 s (§6.1/§6.3)
+- [x] Master VU meters: quad + uniforms, ok/warn/clip zones from the theme, smoothed attack/release and decaying peak-hold via `theme::easing` (§6.1/§6.3)
+- [x] Texts: deck panel (title, BPM, position/remaining time, pitch, volume, cue) + status bar (device/channels/buffer, MIDI controller, mix, VU, underruns, audio load, smoothed fps) (§6.3)
+- [x] UI interactions (keyboard) emit the same `mapping::Action`s as MIDI, routed by `midi::to_engine_command` — one single path (§6.4); `Seek` action added
+- [x] Idle mode: 10 fps via `WinitSettings` after > 5 s with no playback, jog or interaction; immediate return to `Continuous`; the audio thread never affected (§6.5)
+- [x] Animations based on real time (dt), never on the frame counter — 120/144 Hz compatible (§6.1)
 
-**M6b (fait)** :
+**M6b (done)**:
 
-- [x] Fonts : **Inter** (variable) + **Phosphor Icons** vendorisées avec licences (OFL/MIT), embarquées dans le binaire (`fonts.rs`, module local équivalent à celui des projets internes) (§6.2)
-- [x] Widgets souris : boutons play/cue/PFL/load et sliders volume/pitch/EQ par deck, crossfader + cue-mix + casque + master au centre — hit-testing manuel, rendu ColorMaterial + Text2d, chaque interaction émet les mêmes `mapping::Action` que le MIDI via `emit_control` (§6.3/§6.4)
-- [x] **Bibliothèque intégrée en Bevy natif** (quads + Text2d du design system — egui reste cantonné aux panneaux préférences/debug, §6.1) : navigation dossiers/fichiers audio **pilotable au contrôleur** (encodeur BROWSER `LibraryScroll`, poussoir `LibraryEnter`, boutons Load = charger la sélection), au clavier (modal, flèches + `F`/`L`) et à la souris ; ligne `..` synthétique pour remonter à l'encodeur seul ; le dialogue système `rfd` (§6.3, xdg-portal sans GTK) reste accessible depuis le panneau F12
-- [x] Layout **entièrement responsive** : bandes verticales (bandeau, waveform A, contrôles, waveform B, barre d'état) et zones (deck A | mixer | deck B) en fractions de fenêtre — tout se réarrange au redimensionnement ; panneaux de fond et jauges de remplissage sur les sliders
-- [x] `bevy_egui` 0.41 : panneau préférences (fenêtre waveform) + diagnostics (périph, buffer/latence, MIDI, underruns, charge, état decks), bascule `F12`, stylé depuis les tokens du thème — jamais visible en session normale (§6.1/§6.2)
-- [x] Spectrogramme v0.2 : fondations posées — bus d'analyseurs + canal `AnalysisFrame` (§4.2) et pipeline texture→shader validé par la waveform ; la ring texture arrive avec l'analyseur spectral (v0.2), sans changement d'architecture (§6.1)
-- [ ] **Validation matérielle** : session de mix complète au contrôleur, framerate natif stable (vérifier sur 120/144 Hz), frame CPU+GPU < 8 ms, idle mesuré sur laptop
+- [x] Fonts: **Inter** (variable) + **Phosphor Icons** vendored with licenses (OFL/MIT), embedded in the binary (`fonts.rs`) (§6.2)
+- [x] Mouse widgets: play/cue/PFL/load buttons and volume/pitch/EQ sliders per deck, crossfader + cue-mix + headphones + master in the center — manual hit-testing, ColorMaterial + Text2d rendering, every interaction emits the same `mapping::Action`s as MIDI via `emit_control` (§6.3/§6.4)
+- [x] **Integrated library in native Bevy** (design-system quads + Text2d — egui stays confined to the preferences/debug panels, §6.1): folder/audio-file navigation **drivable from the controller** (BROWSER encoder `LibraryScroll`, push `LibraryEnter`, Load buttons = load the selection), from the keyboard (modal, arrows + `F`/`L`) and with the mouse; synthetic ".." row to go up with the encoder alone; the `rfd` system dialog (§6.3, xdg-portal without GTK) stays reachable from the F12 panel
+- [x] **Fully responsive** layout: vertical bands (header, waveform A, controls, waveform B, status bar) and zones (deck A | mixer | deck B) in window fractions — everything rearranges on resize; background panels and fill gauges on the sliders
+- [x] `bevy_egui` 0.41: preferences panel (waveform window) + diagnostics (device, buffer/latency, MIDI, underruns, load, deck states), `F12` toggle, styled from the theme tokens — never visible in a normal session (§6.1/§6.2)
+- [x] v0.2 spectrogram: foundations laid — analyzer bus + `AnalysisFrame` channel (§4.2) and the texture→shader pipeline validated by the waveform; the ring texture arrives with the spectral analyzer (v0.2), no architecture change (§6.1)
+- [ ] **Hardware validation**: full mix session on the controller, stable native framerate (check on 120/144 Hz), CPU+GPU frame < 8 ms, idle measured on a laptop
 
-**Sortie** : session de mix complète au contrôleur, framerate natif stable, frame CPU+GPU < 8 ms.
+**Exit**: full mix session on the controller, stable native framerate, CPU+GPU frame < 8 ms.
 
 ---
 
-## Chantiers transverses (valables à chaque jalon)
+## Cross-cutting concerns (hold at every milestone)
 
-- Frontière Bevy : `engine`/`decode`/`analysis`/`midi`/`mapping` sans dépendance Bevy — vérifiée en CI à chaque push (§1.4/§2.4)
-- Règles du callback audio (§2.2) : aucune allocation, aucun lock, aucune I/O, aucun blocage — revue systématique + `rt-checks` en debug
-- `cargo clippy -D warnings` + `cargo fmt --check` + tests 3 OS verts avant merge
-- Épinglage Bevy : toute montée de version est une tâche planifiée dédiée (~1×/an), jamais au fil de l'eau (§1.4)
-- Pas de crate Bevy tierce non activement maintenue (§1.4)
+- Bevy boundary: `engine`/`decode`/`analysis`/`midi`/`mapping` without a Bevy dependency — checked in CI on every push (§1.4/§2.4, Rule 2)
+- Audio callback rules (§2.2, Rule 1): no allocation, no lock, no I/O, no blocking — systematic review + `rt-checks` in debug
+- `cargo clippy -D warnings` + `cargo fmt --check` + tests green on the 3 OSes before merge (Rule 3)
+- Bevy pinning: any version bump is a dedicated planned task (~1×/year), never done in passing (§1.4, Rule 4)
+- No third-party Bevy crate that is not actively maintained (§1.4)
 
-## Après le POC (v0.2+, hors périmètre v0.1)
+## After the POC (v0.2+, out of the v0.1 scope)
 
-- Streaming par chunks (pistes > 15 min)
-- Spectrogramme temps réel activé (infrastructure posée en M6) ; FFT en compute shader
-- Beatmatch guide (LEDs tempo/phase)
-- Keylock / time-stretch, sync/master tempo, effets, bibliothèque musicale, enregistrement du mix
-- Autres contrôleurs (l'architecture mapping générique le permet déjà)
+- Chunked streaming (tracks > 15 min)
+- Real-time spectrogram enabled (infrastructure laid in M6); FFT as a compute shader
+- Beatmatch guide (tempo/phase LEDs)
+- Keylock / time-stretch, sync/master tempo, effects, music library, mix recording
+- Other controllers (the generic mapping architecture already allows it)

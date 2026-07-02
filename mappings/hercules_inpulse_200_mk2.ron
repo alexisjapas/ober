@@ -1,67 +1,67 @@
-// Mapping Hercules DJControl Inpulse 200 MK2.
+// Hercules DJControl Inpulse 200 MK2 mapping.
 //
-// Source primaire : mapping Mixxx de l'Inpulse 200 (dépôt mixxxdj/mixxx,
-// res/controllers/Hercules_DJControl_Inpulse_200.midi.xml + script JS) — le
-// MK2 est réputé compatible. CHAQUE CODE RESTE À VALIDER SUR LE MATÉRIEL
-// avec `cargo run -p midi --bin midi-probe` (checklist TESTING.md, M3).
+// Primary source: the Mixxx mapping of the Inpulse 200 (mixxxdj/mixxx repo,
+// res/controllers/Hercules_DJControl_Inpulse_200.midi.xml + its JS script) —
+// the MK2 is reputed compatible. EVERY CODE REMAINS TO BE VALIDATED ON THE
+// HARDWARE with `cargo run -p midi --bin midi-probe` (TESTING.md checklist, M3).
 //
-// Particularités du contrôleur (relevées dans la référence Mixxx) :
-// - la couche Shift est gérée PAR LE MATÉRIEL : boutons shiftés émis sur les
-//   canaux 4/5 (0x94/0x95), jogs shiftés sur 0xB4/0xB5 — le flag `shift` du
-//   format reste disponible pour d'autres contrôleurs ;
-// - 2 bandes d'EQ seulement (basses CC 0x02, aigus CC 0x04) — pas de médium ;
-// - volume casque et mix cue/master sont ANALOGIQUES (pas de MIDI) : ils
-//   restent au clavier dans ober ;
-// - pitch 14 bits (MSB 0x08, LSB 0x28) — MSB seul exploité pour l'instant ;
-// - jogs : 0x09 = rotation sans touch (bend), 0x0A = rotation avec touch
-//   (scratch), note 0x08 = touch capacitif ; ±1 en complément à deux ;
-// - LEDs pilotables après le message d'init « full MIDI » (0xB0 0x7F 0x7F) ;
-//   feedback (play/cue/vinyl…) : jalon M5.
+// Controller particularities (noted in the Mixxx reference):
+// - the Shift layer is handled BY THE HARDWARE: shifted buttons are emitted on
+//   channels 4/5 (0x94/0x95), shifted jogs on 0xB4/0xB5 — the format's `shift`
+//   flag stays available for other controllers;
+// - only 2 EQ bands (low CC 0x02, high CC 0x04) — no mid band;
+// - headphone volume and cue/master mix are ANALOG (no MIDI): they stay on the
+//   keyboard in ober;
+// - 14-bit pitch (MSB 0x08, LSB 0x28) — only the MSB is used for now;
+// - jogs: 0x09 = rotation without touch (bend), 0x0A = rotation with touch
+//   (scratch), note 0x08 = capacitive touch; ±1 in two's complement;
+// - LEDs become drivable after the "full MIDI" init message (0xB0 0x7F 0x7F);
+//   feedback (play/cue/vinyl…): milestone M5.
 
 Mapping(
     name: "Hercules DJControl Inpulse 200 MK2",
     device_match: ["DJControl Inpulse 200 MK2", "DJControl"],
 
-    // Activation du contrôle des LEDs (référence : DJCi200.init de Mixxx).
+    // Enable LED control (reference: Mixxx's DJCi200.init).
     init: [
         (0xB0, 0x7F, 0x7F),
     ],
 
     controls: [
-        // --- Transport (deck A = canal 1, deck B = canal 2) ---
+        // --- Transport (deck A = channel 1, deck B = channel 2) ---
         (input: NoteOn(ch: 1, note: 0x07), action: Play(deck: A), mode: Toggle),
         (input: NoteOn(ch: 2, note: 0x07), action: Play(deck: B), mode: Toggle),
         (input: NoteOn(ch: 1, note: 0x06), action: Cue(deck: A), mode: Momentary),
         (input: NoteOn(ch: 2, note: 0x06), action: Cue(deck: B), mode: Momentary),
 
-        // --- Pré-écoute casque (PFL) ---
+        // --- Headphone pre-listen (PFL) ---
         (input: NoteOn(ch: 1, note: 0x0C), action: HeadphoneCue(deck: A), mode: Toggle),
         (input: NoteOn(ch: 2, note: 0x0C), action: HeadphoneCue(deck: B), mode: Toggle),
 
-        // --- Bibliothèque (encodeur BROWSER + boutons Load) ---
-        // Bibliothèque ouverte : Load charge la piste sélectionnée sur le
-        // deck ; fermée : Load ouvre la bibliothèque.
+        // --- Library (BROWSER encoder + Load buttons) ---
+        // Library open: Load loads the selected track onto the deck;
+        // closed: Load opens the library.
         (input: NoteOn(ch: 1, note: 0x0D), action: Load(deck: A), mode: Momentary),
         (input: NoteOn(ch: 2, note: 0x0D), action: Load(deck: B), mode: Momentary),
         (input: CC(ch: 0, cc: 0x01), action: LibraryScroll, mode: Relative(encoding: TwosComplement)),
         (input: NoteOn(ch: 0, note: 0x00), action: LibraryEnter, mode: Momentary),
 
-        // --- Mixage ---
+        // --- Mixing ---
         (input: CC(ch: 0, cc: 0x00), action: CrossFader, mode: Absolute()),
         (input: CC(ch: 1, cc: 0x00), action: Volume(deck: A), mode: Absolute()),
         (input: CC(ch: 2, cc: 0x00), action: Volume(deck: B), mode: Absolute()),
 
-        // --- EQ (2 bandes sur ce contrôleur) ---
+        // --- EQ (2 bands on this controller) ---
         (input: CC(ch: 1, cc: 0x02), action: EqLow(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
         (input: CC(ch: 1, cc: 0x04), action: EqHigh(deck: A), mode: Absolute(curve: DbLinear(-26, 6))),
         (input: CC(ch: 2, cc: 0x02), action: EqLow(deck: B), mode: Absolute(curve: DbLinear(-26, 6))),
         (input: CC(ch: 2, cc: 0x04), action: EqHigh(deck: B), mode: Absolute(curve: DbLinear(-26, 6))),
 
-        // --- Pitch (±8 % côté moteur ; sens à valider sur le matériel) ---
+        // --- Pitch (±8 % engine-side; direction to validate on the hardware) ---
         (input: CC(ch: 1, cc: 0x08), action: Pitch(deck: A), mode: Absolute()),
         (input: CC(ch: 2, cc: 0x08), action: Pitch(deck: B), mode: Absolute()),
 
-        // --- Jogs (traduits dès M3, exploités par le modèle scratch au M4) ---
+        // --- Jogs (translated since M3, consumed by the M4 scratch model) ---
         (input: NoteOn(ch: 1, note: 0x08), action: JogTouch(deck: A), mode: Gate),
         (input: NoteOn(ch: 2, note: 0x08), action: JogTouch(deck: B), mode: Gate),
         (input: CC(ch: 1, cc: 0x09), action: JogBend(deck: A), mode: Relative(encoding: TwosComplement)),
@@ -70,9 +70,9 @@ Mapping(
         (input: CC(ch: 2, cc: 0x0A), action: JogTick(deck: B), mode: Relative(encoding: TwosComplement)),
     ],
 
-    // Feedback LEDs (codes relevés dans Mixxx — mêmes notes que les
-    // boutons). Pas de VU MIDI connu sur ce contrôleur : les états VuMaster
-    // et VuDeck du format restent disponibles pour d'autres matériels.
+    // LED feedback (codes lifted from Mixxx — same notes as the buttons).
+    // No known MIDI VU on this controller: the format's VuMaster and VuDeck
+    // states stay available for other hardware.
     feedback: [
         (state: Playing(deck: A), output: NoteOn(ch: 1, note: 0x07)),
         (state: Playing(deck: B), output: NoteOn(ch: 2, note: 0x07)),
@@ -85,7 +85,7 @@ Mapping(
     ],
 
     jog: (
-        ticks_per_rev: 720,     // à valider avec midi-probe sur le matériel
+        ticks_per_rev: 720,     // to validate with midi-probe on the hardware
         touch_scratch: true,
         bend_sensitivity: 0.3,
         release_ramp_ms: 100,

@@ -1,84 +1,94 @@
-# ober — guide de session
+# ober — session guide
 
-Logiciel de mix DJ open-source (Rust + Bevy), POC piloté par un Hercules
-DJControl Inpulse 200 MK2. **Les specs contractuelles sont dans
-[docs/SPECS.md](docs/SPECS.md)** (copie verbatim — ne pas l'éditer) ; l'état
-d'avancement et les prochaines actions dans [ROADMAP.md](ROADMAP.md)
-(section « Reprendre le travail »).
+Open-source DJ mixing software (Rust + Bevy), a POC driven by a Hercules
+DJControl Inpulse 200 MK2. **The contractual specs live in
+[docs/SPECS.md](docs/SPECS.md)** (verbatim copy — do not edit); the binding
+rules of work in [CONSTITUTION-DEV.md](CONSTITUTION-DEV.md); progress and
+next actions in [ROADMAP.md](ROADMAP.md) ("Resuming work" section).
 
-## Environnement et commandes
+## Environment and commands
 
-Tout passe par le flake nix (`cargo` n'existe pas hors devShell) :
+Everything goes through the nix flake (`cargo` does not exist outside the
+devShell):
 
 ```sh
 nix develop -c cargo test --workspace                        # 60 tests
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo fmt --all
-nix develop -c ./scripts/check-bevy-boundary.sh              # frontière Bevy
-nix develop -c cargo run -p app                              # binaire `ober`
-nix develop -c cargo run -p midi --bin midi-probe            # log MIDI brut
-nix develop -c cargo bench -p engine --bench callback        # budget RT
+nix develop -c ./scripts/check-bevy-boundary.sh              # Bevy boundary
+nix develop -c cargo run -p app                              # `ober` binary
+nix develop -c cargo run -p midi --bin midi-probe            # raw MIDI log
+nix develop -c cargo bench -p engine --bench callback        # RT budget
 nix develop -c cargo check -p engine --features rt-checks    # anti-alloc
+nix develop -c cargo about generate about.hbs -o THIRD-PARTY-LICENSES.html
 ```
 
-La CI (GitHub Actions) exige : fmt, clippy `-D warnings`, tests sur
-Linux/macOS/Windows, frontière Bevy. Ne rien pousser qui casse l'un d'eux.
+CI (GitHub Actions) requires: fmt, clippy `-D warnings`, tests on
+Linux/macOS/Windows, `rt-checks` build, Bevy boundary. Never push anything
+that breaks one of them. A release = an annotated `vX.Y.Z` tag (Rule 11).
 
-## Règles dures (specs §1.4 et §2.2 — non négociables)
+## Hard rules (CONSTITUTION-DEV + specs §1.4/§2.2 — non-negotiable)
 
-1. **`engine`, `decode`, `analysis`, `midi`, `mapping` ne dépendent JAMAIS
-   de Bevy** (vérifié en CI). Seule `crates/app` y touche.
-2. **Le callback audio** (`engine::graph::AudioGraph::process` et tout ce
-   qu'il appelle) : aucune allocation, aucun lock, aucune I/O, aucun appel
-   bloquant, aucune désallocation (les `Arc` repartent par le canal de
-   récupération). La feature `rt-checks` le vérifie en debug.
-3. **Bevy est épinglé en version exacte** (`=0.19.0`) — toute montée de
-   version est une tâche planifiée dédiée, jamais au fil de l'eau.
-4. Les coefficients DSP (EQ…) se calculent **hors** callback : les
-   commandes transportent des valeurs prêtes à l'emploi.
-5. Un seul chemin pour les intentions (§6.4) : contrôleur, clavier et
-   souris émettent des `mapping::Action`, routées par
-   `midi::to_engine_command` (`app::emit_control`).
+1. **`engine`, `decode`, `analysis`, `midi`, `mapping` NEVER depend on
+   Bevy** (CI-enforced). Only `crates/app` touches it. — Rule 2.
+2. **The audio callback** (`engine::graph::AudioGraph::process` and
+   everything it calls): no allocation, no lock, no I/O, no blocking call,
+   no deallocation (`Arc`s leave through the reclaim channel). The
+   `rt-checks` feature enforces this in debug. — Rule 1.
+3. **Bevy is pinned to an exact version** (`=0.19.0`) — any bump is a
+   dedicated planned task, never done in passing. — Rule 4.
+4. DSP coefficients (EQ…) are computed **outside** the callback: commands
+   carry ready-to-use values. — Rule 5.
+5. One single path for intents (§6.4): controller, keyboard and mouse emit
+   `mapping::Action`s, routed by `midi::to_engine_command`
+   (`app::emit_control`). — Rule 6.
+6. **English for everything written for the project** — code, comments,
+   docs, commit messages, tags, branches, PRs, issues. Exceptions:
+   `docs/SPECS.md` (verbatim French contract) and legacy French comments,
+   migrated when the code they annotate is touched.
 
-## Architecture (résumé — détails dans les docs de modules)
+## Architecture (summary — details in the module docs)
 
 ```
-thread audio RT (cpal callback : AudioGraph::process)
-   ↑ 2 rings rtrb commandes (UI, MIDI=chemin court §5.1)
-   ↓ triple_buffer snapshots · ring tap audio · ring récupération d'Arc
-workers : decode (symphonia+rubato→f32 48 kHz), analysis (BPM/summary),
-          thread MIDI (midir : mapping RON→Action→commande, feedback LED 30 Hz)
-Bevy (app) : waveform.rs (shader 3 bandes/mipmaps/beatgrid), vu.rs, hud.rs,
-          widgets.rs (hit-testing manuel), browser.rs (bibliothèque native),
-          panel.rs (egui F12 uniquement), power.rs (idle 10 fps), theme.rs
+RT audio thread (cpal callback: AudioGraph::process)
+   ↑ 2 rtrb command rings (UI, MIDI = short path §5.1)
+   ↓ triple_buffer snapshots · audio tap ring · Arc reclaim ring
+workers: decode (symphonia+rubato→f32 48 kHz), analysis (BPM/summary),
+          MIDI thread (midir: RON mapping→Action→command, LED feedback 30 Hz)
+Bevy (app): waveform.rs (3-band shader/mipmaps/beatgrid), vu.rs, hud.rs,
+          widgets.rs (manual hit-testing), browser.rs (native library),
+          panel.rs (egui F12 only), power.rs (idle 10 fps), theme.rs
 ```
 
-- Layout 100 % en fractions de fenêtre : `theme::layout::bands()`.
-- Shaders WGSL et fonts embarqués : `crates/app/src/shaders/`, `src/fonts/`
-  (`embedded://ober/...` — préfixe = nom de la target binaire).
-- Mapping contrôleur : `mappings/hercules_inpulse_200_mk2.ron` — le fichier
-  local prime sur la copie embarquée (itération sans recompiler). Référence
-  des codes : mapping Mixxx de l'Inpulse 200 v1, à confirmer au midi-probe.
-- Config runtime : `ober.config.ron` (cf. `ober.config.example.ron`).
+- Layout 100 % in window fractions: `theme::layout::bands()`.
+- WGSL shaders and fonts embedded: `crates/app/src/shaders/`, `src/fonts/`
+  (`embedded://ober/...` — prefix = binary target name).
+- Controller mapping: `mappings/hercules_inpulse_200_mk2.ron` — the local
+  file overrides the embedded copy (iterate without recompiling). Code
+  reference: the Mixxx mapping of the Inpulse 200 v1, to confirm with
+  midi-probe.
+- Runtime config: `ober.config.ron` (cf. `ober.config.example.ron`).
 
 ## Conventions
 
-- Docs, commentaires, messages de commit : **en français**, avec renvois aux
-  sections des specs (ex. « §3.3 »).
-- Couleurs/espacements/easings UI : uniquement via `app/src/theme.rs`.
-- Chaque jalon/correctif : tests + clippy + fmt + frontière verts, commit
-  poussé, CI vérifiée (`gh run list`), ROADMAP/TESTING mis à jour.
-- Ne pas éditer `docs/SPECS.md` (verbatim). La connaissance opérationnelle
-  va dans ROADMAP/README/TESTING/docs/, pas dans les messages de chat.
+- Conventional Commits (`feat:`, `fix:`, `chore:`, …), everything in
+  English — Rule 10. Versioning and tags: semver of the shipped artifact,
+  annotated tag = changelog — Rule 11.
+- UI colors/spacings/easings: only via `app/src/theme.rs` — Rule 7.
+- Doc-comments explain the *why* and cite the specs (e.g. "§3.3") — Rule 9.
+- Every milestone/fix: tests + clippy + fmt + boundary green, commit
+  pushed, CI checked (`gh run list`), ROADMAP/TESTING updated.
+- Do not edit `docs/SPECS.md` (verbatim). Operational knowledge goes into
+  ROADMAP/README/TESTING/docs/, not into chat messages.
 
-## Pièges connus
+## Known pitfalls
 
-- Versions récentes aux API changées : symphonia 0.6, rubato 3 (`Async` +
+- Recent versions with changed APIs: symphonia 0.6, rubato 3 (`Async` +
   `FixedAsync` = ex-`SincFixedIn`), cpal 0.18 (`description()`,
   `SampleRate = u32`), Bevy 0.19 (`MessageReader`, `FontSize::Px`,
-  `sprite_render::Material2d`). Vérifier dans `~/.cargo/registry/src/` en
-  cas de doute, pas de mémoire d'entraînement.
-- La plage de buffer cpal doit être lue sur **la configuration exacte**
-  (canaux/fréquence/format), pas sur le profil par défaut — le MK2 impose
-  1114 frames (≈ 23 ms) en 4 canaux @ 48 kHz (cf. docs/latence.md).
-- `cargo run` hors `nix develop` → `cargo: command not found`.
+  `sprite_render::Material2d`). When in doubt check
+  `~/.cargo/registry/src/`, not training memory.
+- The cpal buffer range must be read on **the exact configuration**
+  (channels/rate/format), not on the default profile — the MK2 imposes
+  1114 frames (≈ 23 ms) in 4 channels @ 48 kHz (cf. docs/latency.md).
+- `cargo run` outside `nix develop` → `cargo: command not found`.

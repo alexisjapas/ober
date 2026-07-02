@@ -1,108 +1,112 @@
-# TESTING — checklist de test manuel contrôleur
+# TESTING — manual controller test checklist
 
-Pas de test matériel en CI (specs §7) : cette checklist se déroule à la main
-avec le **Hercules DJControl Inpulse 200 MK2** branché, avant chaque merge
-touchant `engine`, `midi` ou `mapping`.
+No hardware test in CI (specs §7, CONSTITUTION-DEV Rule 8): this checklist
+is run by hand with the **Hercules DJControl Inpulse 200 MK2** plugged in,
+before any merge touching `engine`, `midi` or `mapping`.
 
-État : tout le code M0→M6 est implémenté et vert en CI — ces checklists
-sont la **validation matérielle restante** du POC. Déjà vérifié sur le
-MK2 : détection de la carte et ouverture du stream 4 canaux @ 48 kHz
-(buffer imposé 1114 frames ≈ 23 ms, cf. docs/latence.md).
+Status: all M0→M6 code is implemented and green in CI — these checklists
+are the **remaining hardware validation** of the POC. Already verified on
+the MK2: card detection and 4-channel stream opening @ 48 kHz (imposed
+buffer 1114 frames ≈ 23 ms, cf. docs/latency.md).
 
-## Pré-requis
+## Prerequisites
 
-- [ ] Contrôleur détecté au lancement (barre d'état / logs)
-- [ ] Carte son "DJControl" ouverte en 4 canaux (M2+) ; sinon fallback stéréo
-- [ ] Débrancher/rebrancher le contrôleur en cours de session : reconnexion
-      automatique, aucun crash (M3+)
+- [ ] Controller detected at launch (status bar / logs)
+- [ ] "DJControl" sound card opened in 4 channels (M2+); otherwise stereo
+      fallback
+- [ ] Unplug/replug the controller mid-session: automatic reconnection,
+      no crash (M3+)
 
-## M1 — Moteur audio (clavier)
+## M1 — Audio engine (keyboard)
 
-- [ ] Chargement de 2 pistes (MP3, FLAC, WAV), play/pause/seek au clavier
-- [ ] Crossfader et volumes au clavier, aucun underrun signalé
-- [ ] Latence mesurée ≤ 10 ms — méthode dans docs/latence.md ; attention :
-      le MK2 impose ≈ 23 ms de buffer en 4 canaux ALSA brut (pistes
-      d'amélioration documentées au même endroit)
+- [ ] Loading 2 tracks (MP3, FLAC, WAV), play/pause/seek from the keyboard
+- [ ] Crossfader and volumes from the keyboard, no underrun reported
+- [ ] Measured latency ≤ 10 ms — method in docs/latency.md; note: the MK2
+      imposes ≈ 23 ms of buffer in raw 4-channel ALSA (improvement avenues
+      documented in the same place)
 
 ## M2 — DSP
 
-- [ ] EQ 3 bandes audibles et symétriques sur chaque deck, kill fonctionnel
-- [ ] Varispeed ±8 % / ±16 % sans artefacts
-- [ ] Pré-écoute casque : cue par deck, potard cue/master, gain casque
-- [ ] Limiteur : pas d'écrêtage dur en poussant tous les gains
+- [ ] 3-band EQ audible and symmetric on each deck, working kill
+- [ ] Varispeed ±8 % / ±16 % without artifacts
+- [ ] Headphone pre-listen: cue per deck, cue/master knob, headphone gain
+- [ ] Limiter: no hard clipping when pushing every gain
 
 ## M3 — MIDI in
 
-Avant tout : valider les codes MIDI réels du MK2 avec
-`cargo run -p midi --bin midi-probe` (le mapping vient de l'Inpulse 200
-première génération via Mixxx — corriger `mappings/*.ron` si écart).
+First of all: validate the MK2's real MIDI codes with
+`cargo run -p midi --bin midi-probe` (the mapping comes from the
+first-generation Inpulse 200 via Mixxx — fix `mappings/*.ron` on any
+mismatch).
 
-- [ ] Contrôleur détecté au lancement (« MIDI <nom> » dans le titre) et
-      LEDs pilotables après l'init (`0xB0 0x7F 0x7F`)
-- [ ] Débrancher → titre repasse à « MIDI — », aucun crash ; rebrancher →
-      reconnexion automatique sous ~2 s, contrôles de nouveau opérants
-- [ ] Play A/B (0x91/0x92 note 0x07) : lecture/pause, état titre cohérent
-- [ ] Cue A/B (note 0x06) : pose du point à l'arrêt, retour au point en
-      lecture, pré-écoute tant que le bouton est tenu depuis le point
-- [ ] PFL casque A/B (note 0x0C) : toggle cue casque (indicateur CUE titre)
-- [ ] Load A/B (note 0x0D) : message log (file picker M6)
-- [ ] Crossfader (0xB0 0x00) : plein gauche = A seul, plein droite = B seul,
-      courbe constant power au centre
-- [ ] Volumes (0xB1/0xB2 0x00) : plage complète, sans crans audibles
-- [ ] EQ basses/aigus (0x02/0x04) : kill −26 dB franc à gauche, +6 dB à
-      droite, potard médian ≈ neutre à vérifier à l'oreille
-- [ ] Pitch (0x08) : ±8 %, **vérifier le sens** (haut = plus lent attendu ?)
-      et l'absence de saut au premier mouvement
-- [ ] Jogs : les messages arrivent (log/debug) — le scratch lui-même : M4
-- [ ] Bibliothèque au contrôleur : encodeur BROWSER (CC 0xB0 0x01) fait
-      défiler, poussoir (0x90 0x00) entre dans les dossiers (ligne « .. »
-      pour remonter), boutons Load chargent la piste sélectionnée
-- [ ] Latence perçue fader → son : imperceptible (chemin court §5.1)
+- [ ] Controller detected at launch ("MIDI <name>" in the title) and LEDs
+      drivable after the init (`0xB0 0x7F 0x7F`)
+- [ ] Unplug → title falls back to "MIDI —", no crash; replug → automatic
+      reconnection within ~2 s, controls operational again
+- [ ] Play A/B (0x91/0x92 note 0x07): play/pause, consistent title state
+- [ ] Cue A/B (note 0x06): sets the point when stopped, returns to the
+      point while playing, pre-listens from the point while held
+- [ ] Headphone PFL A/B (note 0x0C): headphone cue toggle (CUE indicator
+      in the title)
+- [ ] Load A/B (note 0x0D): log message (file picker M6)
+- [ ] Crossfader (0xB0 0x00): full left = A only, full right = B only,
+      constant-power curve at center
+- [ ] Volumes (0xB1/0xB2 0x00): full range, no audible steps
+- [ ] EQ low/high (0x02/0x04): clean −26 dB kill at the left stop, +6 dB at
+      the right, mid-position ≈ neutral to verify by ear
+- [ ] Pitch (0x08): ±8 %, **verify the direction** (up = slower expected?)
+      and the absence of a jump on the first movement
+- [ ] Jogs: messages arrive (log/debug) — scratching itself: M4
+- [ ] Library from the controller: BROWSER encoder (CC 0xB0 0x01) scrolls,
+      push (0x90 0x00) enters folders (".." row to go up), Load buttons
+      load the selected track
+- [ ] Perceived fader → sound latency: imperceptible (short path §5.1)
 
 ## M4 — Jogs
 
-Les paramètres du modèle vivent dans `mappings/*.ron` (section `jog:`) —
-itérer à l'oreille sans recompiler (le fichier local prime sur l'embarqué).
+The model's parameters live in `mappings/*.ron` (`jog:` section) — iterate
+by ear without recompiling (the local file overrides the embedded copy).
 
-- [ ] `ticks_per_rev` réel du MK2 confirmé au midi-probe (un tour complet
-      de jog = combien de ticks 0x0A ?)
-- [ ] Scratch : la piste suit le doigt sans traîner ni osciller ; aucun son
-      « escalier » à rotation lente ; aller-retour rapide propre
-- [ ] Prise en main d'un deck en lecture : freinage naturel (pas de coupure)
-- [ ] Relâchement : reprise de la lecture en ~100 ms sans à-coup ;
-      sur deck à l'arrêt : glissement qui s'éteint en douceur
-- [ ] Scratch arrière jusqu'au début de piste : butée propre, pas de crash
-- [ ] Bend (bord, deck en lecture) : correction de tempo douce dans les deux
-      sens, retour progressif à l'arrêt de la rotation
-- [ ] Comparaison A/B avec Mixxx sur le même matériel ; ajuster
+- [ ] Real MK2 `ticks_per_rev` confirmed with midi-probe (one full jog turn
+      = how many 0x0A ticks?)
+- [ ] Scratch: the track follows the finger without dragging or
+      oscillating; no "staircase" sound at slow rotation; clean fast
+      back-and-forth
+- [ ] Grabbing a playing deck: natural braking (no cutoff)
+- [ ] Release: playback resumes in ~100 ms without a jolt; on a stopped
+      deck: a glide that dies out smoothly
+- [ ] Backward scratch to the start of the track: clean stop, no crash
+- [ ] Bend (edge, playing deck): gentle tempo correction both ways,
+      progressive return when the rotation stops
+- [ ] A/B comparison with Mixxx on the same hardware; adjust
       `bend_sensitivity`, `velocity_window_ms`, `scratch_smoothing_ms`,
-      `release_ramp_ms` puis reporter les valeurs retenues dans le RON embarqué
+      `release_ramp_ms`, then port the retained values into the embedded RON
 
-## M5 — Feedback + analyse
+## M5 — Feedback + analysis
 
-- [ ] À la connexion : LEDs play/cue/PFL reflètent immédiatement l'état
-      courant (y compris après un débranchement/rebranchement)
-- [ ] Play : LED play (note 0x07) suit lecture/pause, y compris via clavier
-- [ ] Cue : LED cue (note 0x06) allumée dès qu'un point est posé
-- [ ] PFL : LED casque (note 0x0C) suit le toggle (bouton ou touche 1/2)
-- [ ] Fin de piste : LED (note 0x1C) s'allume sous 30 s restantes
-- [ ] Aucun flood MIDI : LEDs stables = aucun message (vérifier au midi-probe
-      sur le port de sortie ou via aseqdump)
-- [ ] BPM sur pistes réelles : valeur stable et plausible (comparer à Mixxx),
-      affichée dans le titre peu après le chargement
+- [ ] On connection: play/cue/PFL LEDs immediately reflect the current
+      state (including after an unplug/replug)
+- [ ] Play: play LED (note 0x07) follows play/pause, including via keyboard
+- [ ] Cue: cue LED (note 0x06) lit as soon as a point is set
+- [ ] PFL: headphone LED (note 0x0C) follows the toggle (button or key 1/2)
+- [ ] End of track: LED (note 0x1C) lights up under 30 s remaining
+- [ ] No MIDI flood: stable LEDs = no message (check with midi-probe on the
+      output port or via aseqdump)
+- [ ] BPM on real tracks: stable, plausible value (compare with Mixxx),
+      displayed in the title shortly after loading
 
 ## M6 — UI
 
-- [ ] Session de mix complète au contrôleur sans toucher la souris
-- [ ] Waveforms : défilement parfaitement fluide en lecture (position
-      extrapolée), beatgrid alignée à l'oreille, zoom molette sans à-coup
-      (bascule de mipmap invisible)
-- [ ] Widgets souris : chaque bouton/slider agit et reste synchronisé avec
-      le contrôleur et le clavier (même état affiché)
-- [ ] File picker (`F`/`L`, bouton LOAD, bouton MIDI) : chargement pendant
-      la lecture de l'autre deck sans glitch audio
-- [ ] Framerate natif stable (vérifier sur écran 120/144 Hz), frame < 8 ms
-- [ ] Mode idle 10 fps après 5 s d'inactivité (vérifier avec un moniteur de
-      fréquence), réveil instantané, thread audio insensible ; consommation
-      mesurée sur laptop
-- [ ] Panneau F12 : valeurs cohérentes, jamais affiché par défaut
+- [ ] Full mix session on the controller without touching the mouse
+- [ ] Waveforms: perfectly fluid scrolling during playback (extrapolated
+      position), beatgrid aligned by ear, mouse-wheel zoom without jolts
+      (invisible mipmap switch)
+- [ ] Mouse widgets: every button/slider acts and stays in sync with the
+      controller and the keyboard (same displayed state)
+- [ ] File picker (`F`/`L`, LOAD button, MIDI button): loading while the
+      other deck plays, without an audio glitch
+- [ ] Stable native framerate (check on a 120/144 Hz display), frame < 8 ms
+- [ ] Idle mode 10 fps after 5 s of inactivity (check with a frequency
+      monitor), instant wake-up, audio thread unaffected; consumption
+      measured on a laptop
+- [ ] F12 panel: consistent values, never shown by default

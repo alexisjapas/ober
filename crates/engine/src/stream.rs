@@ -70,8 +70,8 @@ impl StreamInfo {
         self.channels >= 4
     }
 
-    /// Latence théorique du buffer logiciel (la latence réelle du
-    /// périphérique s'y ajoute — cf. docs/latence.md).
+    /// Theoretical latency of the software buffer (the device's real
+    /// latency adds on top — cf. docs/latency.md).
     pub fn buffer_latency_ms(&self) -> Option<f64> {
         self.buffer_frames
             .map(|frames| f64::from(frames) * 1000.0 / f64::from(self.sample_rate))

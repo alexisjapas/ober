@@ -1,14 +1,14 @@
-// Configuration optionnelle d'ober : copier vers `ober.config.ron` à côté
-// du binaire (ou du répertoire de lancement) et adapter.
+// Optional ober configuration: copy to `ober.config.ron` next to the binary
+// (or in the launch directory) and adapt.
 //
-// Sans fichier de config : détection automatique d'un périphérique dont le
-// nom contient "DJControl" (stream 4 canaux master+casque s'il le supporte),
-// sinon périphérique par défaut du système en stéréo.
+// Without a config file: automatic detection of a device whose name contains
+// "DJControl" (4-channel master+headphone stream if it supports it), otherwise
+// the system default device in stereo.
 Config(
-    // Substring (insensible à la casse) du nom du périphérique de sortie.
+    // Case-insensitive substring of the output device name.
     device_match: Some("DJControl"),
-    // Taille de buffer en frames à 48 kHz (256 ≈ 5,3 ms). Clampée à la
-    // plage supportée par la configuration retenue — le DJControl Inpulse
-    // 200 Mk2 impose par ex. 1114 frames (≈ 23 ms) en 4 canaux ALSA brut.
+    // Buffer size in frames at 48 kHz (256 ≈ 5.3 ms). Clamped to the range
+    // supported by the selected configuration — the DJControl Inpulse 200 Mk2
+    // imposes e.g. 1114 frames (≈ 23 ms) in raw 4-channel ALSA.
     buffer_frames: Some(256),
 )
