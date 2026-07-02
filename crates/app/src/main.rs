@@ -860,6 +860,10 @@ fn midi_sync(
                 browser.open = true;
                 browser.scroll_by(n);
             }
+            (mapping::Action::LibraryFolderScroll, ControlValue::Relative(n)) => {
+                browser.open = true;
+                browser.scroll_dirs_by(n);
+            }
             (mapping::Action::LibraryEnter, ControlValue::Pressed(true)) => browser.enter(),
             _ => {}
         }

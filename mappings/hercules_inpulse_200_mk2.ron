@@ -44,6 +44,9 @@ Mapping(
         (input: NoteOn(ch: 1, note: 0x0D), action: Load(deck: A), mode: Momentary),
         (input: NoteOn(ch: 2, note: 0x0D), action: Load(deck: B), mode: Momentary),
         (input: CC(ch: 0, cc: 0x01), action: LibraryScroll, mode: Relative(encoding: TwosComplement)),
+        // Shift + BROWSER encoder: the folder pane (hardware shift = +4 on
+        // the channel, like the jogs) — to confirm with midi-probe.
+        (input: CC(ch: 4, cc: 0x01), action: LibraryFolderScroll, mode: Relative(encoding: TwosComplement)),
         (input: NoteOn(ch: 0, note: 0x00), action: LibraryEnter, mode: Momentary),
 
         // --- Mixing ---

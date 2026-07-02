@@ -69,6 +69,8 @@ pub struct ProbeInfo {
     pub channels: Option<usize>,
     pub artist: Option<String>,
     pub title: Option<String>,
+    /// Tempo declared by the tags (TBPM…), when present — not an analysis.
+    pub bpm: Option<f64>,
 }
 
 /// Probes `path` headers. `None` when the file isn't recognized audio.
@@ -101,11 +103,13 @@ pub fn probe_info(path: &Path) -> Option<ProbeInfo> {
 
     let mut artist = None;
     let mut title = None;
+    let mut bpm = None;
     if let Some(revision) = format.metadata().current() {
         for tag in &revision.media.tags {
             match &tag.std {
                 Some(StandardTag::Artist(v)) => artist = Some(v.to_string()),
                 Some(StandardTag::TrackTitle(v)) => title = Some(v.to_string()),
+                Some(StandardTag::Bpm(v)) => bpm = Some(*v as f64),
                 _ => {}
             }
         }
@@ -117,6 +121,7 @@ pub fn probe_info(path: &Path) -> Option<ProbeInfo> {
         channels,
         artist,
         title,
+        bpm,
     })
 }
 

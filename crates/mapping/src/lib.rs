@@ -66,8 +66,12 @@ pub enum Action {
     Load {
         deck: Deck,
     },
-    /// Encodeur de navigation dans la bibliothèque (`Relative`).
+    /// Encodeur de navigation dans la bibliothèque (`Relative`) : la liste
+    /// de fichiers (panneau de droite).
     LibraryScroll,
+    /// Navigation dans le panneau des dossiers (`Relative`) — Shift +
+    /// encodeur : la sélection d'un dossier prévisualise ses fichiers.
+    LibraryFolderScroll,
     /// Poussoir de l'encodeur : entrer dans le dossier sélectionné.
     LibraryEnter,
     CrossFader,

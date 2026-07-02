@@ -1,20 +1,26 @@
-//! Bibliothèque intégrée en **Bevy natif** (quads + Text2d du design
-//! system) : panneau latéral droit listant dossiers et fichiers audio,
-//! pilotable aux trois entrées — mêmes intentions partout (specs §6.4) :
+//! Integrated library in **native Bevy** (design-system quads + Text2d):
+//! a two-pane panel over the bottom half of the screen — folders on the
+//! left, audio files of the *selected* folder on the right with metadata
+//! columns (title, artist, BPM, duration — tags read by a background
+//! header probe, `decode::probe_info`, never on the UI thread).
 //!
-//! - **contrôleur** : encodeur BROWSER (`LibraryScroll`), poussoir
-//!   (`LibraryEnter` : entre dans le dossier), boutons Load (charge la
-//!   sélection sur le deck ; bibliothèque fermée : l'ouvre) ;
-//! - **clavier** (modal quand ouverte, le contrôleur reste actif) :
-//!   `↑`/`↓` sélection, `→`/`Entrée` entrer, `←` dossier parent,
-//!   `F`/`L` charger la sélection sur A/B, `B`/`Échap` fermer ;
-//! - **souris** : clic = sélectionner, re-clic = entrer (dossier),
-//!   molette = défiler, boutons « → A »/« → B » = charger.
+//! Same intents on every input (specs §6.4):
 //!
-//! Une ligne « .. » synthétique en tête permet la remontée au parent avec
-//! le seul encodeur. Le dialogue système `rfd` reste accessible depuis le
-//! panneau F12.
+//! - **controller**: BROWSER encoder = file list, Shift + encoder = folder
+//!   list (selecting a folder instantly previews its files), push = enter
+//!   the selected folder, Load buttons = load the selection (library
+//!   closed: open it);
+//! - **keyboard** (modal while open, the controller stays live):
+//!   `↑`/`↓` files, `Shift+↑`/`↓` folders, `Entrée`/`→` enter,
+//!   `←`/`Retour` parent, `F`/`L` load onto A/B, `B`/`Échap` close;
+//! - **mouse**: click = select (folder pane: re-click = enter), wheel
+//!   over a pane = scroll it, « → A »/« → B » buttons = load.
+//!
+//! The folder list starts with a synthetic ".." row (parent) then the
+//! current folder itself — everything stays reachable with the encoder
+//! alone. The `rfd` system dialog remains available from the F12 panel.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bevy::input::mouse::MouseWheel;
@@ -28,14 +34,17 @@ use crate::theme::{color, font, layout};
 use crate::{LoadSender, spawn_load_worker};
 
 const AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "flac", "wav", "ogg", "m4a", "aac"];
-/// Pre-created row pool — sized for tall windows so the list always fills
-/// the panel down to the metadata strip (extra rows stay hidden).
-const MAX_ROWS: usize = 64;
+/// Pre-created row pools (extras stay hidden) — sized for tall windows.
+const MAX_DIR_ROWS: usize = 32;
+const MAX_FILE_ROWS: usize = 32;
 const ROW_HEIGHT: f32 = 24.0;
-/// Bottom strip heights (from the bottom edge): hint line, load buttons,
-/// then the 2-line metadata block; the file list stops right above it.
-const META_TOP: f32 = 84.0;
-const META_BASELINE: f32 = 46.0;
+/// File-pane column offsets, as fractions of the pane width.
+const COLUMNS: [(&str, f32); 4] = [
+    ("Titre", 0.0),
+    ("Artiste", 0.50),
+    ("BPM", 0.78),
+    ("Durée", 0.88),
+];
 
 pub struct BrowserPlugin;
 
@@ -51,21 +60,27 @@ impl Plugin for BrowserPlugin {
 pub struct Entry {
     pub name: String,
     pub path: PathBuf,
-    pub is_dir: bool,
 }
 
 #[derive(Resource)]
 pub struct Browser {
     pub open: bool,
+    /// Current directory: its children fill the folder pane.
     dir: PathBuf,
-    entries: Vec<Entry>,
-    selected: usize,
-    scroll: usize,
+    /// Folder pane rows: "..", the current folder itself, then subfolders.
+    dirs: Vec<Entry>,
+    /// File pane rows: audio files of the selected folder-pane entry.
+    files: Vec<Entry>,
+    dir_selected: usize,
+    file_selected: usize,
+    dir_scroll: usize,
+    file_scroll: usize,
     dirty: bool,
-    /// Metadata strip content, rebuilt when the selection changes
-    /// (`meta_index` is the entry it was computed for).
-    meta_text: String,
-    meta_index: Option<usize>,
+    files_dirty: bool,
+    /// Header-probe cache; filled asynchronously by the probe worker.
+    meta: HashMap<PathBuf, decode::ProbeInfo>,
+    probe_tx: crossbeam_channel::Sender<Vec<PathBuf>>,
+    probe_results: crossbeam_channel::Receiver<(PathBuf, decode::ProbeInfo)>,
 }
 
 impl Default for Browser {
@@ -78,38 +93,94 @@ impl Default for Browser {
             .into_iter()
             .find(|p| p.is_dir())
             .unwrap_or(home);
+        let (probe_tx, probe_results) = spawn_probe_worker();
         Self {
             open: true,
             dir,
-            entries: Vec::new(),
-            selected: 0,
-            scroll: 0,
+            dirs: Vec::new(),
+            files: Vec::new(),
+            dir_selected: 0,
+            file_selected: 0,
+            dir_scroll: 0,
+            file_scroll: 0,
             dirty: true,
-            meta_text: String::new(),
-            meta_index: None,
+            files_dirty: true,
+            meta: HashMap::new(),
+            probe_tx,
+            probe_results,
         }
     }
 }
 
+/// Long-lived metadata worker: receives batches of paths, probes headers
+/// off the UI thread, streams results back. Scroll spam coalesces to the
+/// latest batch; the worker never probes the same path twice.
+fn spawn_probe_worker() -> (
+    crossbeam_channel::Sender<Vec<PathBuf>>,
+    crossbeam_channel::Receiver<(PathBuf, decode::ProbeInfo)>,
+) {
+    let (req_tx, req_rx) = crossbeam_channel::unbounded::<Vec<PathBuf>>();
+    let (res_tx, res_rx) = crossbeam_channel::unbounded();
+    std::thread::Builder::new()
+        .name("browser-probe".into())
+        .spawn(move || {
+            let mut probed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+            while let Ok(mut batch) = req_rx.recv() {
+                while let Ok(newer) = req_rx.try_recv() {
+                    batch = newer;
+                }
+                for path in batch {
+                    if !probed.insert(path.clone()) {
+                        continue;
+                    }
+                    let info = decode::probe_info(&path).unwrap_or_default();
+                    if res_tx.send((path, info)).is_err() {
+                        return;
+                    }
+                }
+            }
+        })
+        .ok();
+    (req_tx, res_rx)
+}
+
 impl Browser {
-    /// Déplace la sélection (encodeur, flèches, molette).
+    /// Déplace la sélection de la liste de fichiers (encodeur, flèches,
+    /// molette).
     pub fn scroll_by(&mut self, delta: i32) {
-        if self.entries.is_empty() {
+        if self.files.is_empty() {
             return;
         }
-        let last = self.entries.len() - 1;
-        self.selected = self
-            .selected
+        let last = self.files.len() - 1;
+        self.file_selected = self
+            .file_selected
             .saturating_add_signed(delta as isize)
             .min(last);
     }
 
+    /// Moves the folder-pane selection (Shift + encoder, Shift + arrows):
+    /// the file pane instantly previews the newly selected folder.
+    pub fn scroll_dirs_by(&mut self, delta: i32) {
+        if self.dirs.is_empty() {
+            return;
+        }
+        let last = self.dirs.len() - 1;
+        let next = self
+            .dir_selected
+            .saturating_add_signed(delta as isize)
+            .min(last);
+        if next != self.dir_selected {
+            self.dir_selected = next;
+            self.files_dirty = true;
+        }
+    }
+
     /// Entre dans le dossier sélectionné (poussoir de l'encodeur, `→`).
     pub fn enter(&mut self) {
-        let Some(entry) = self.entries.get(self.selected) else {
+        let Some(entry) = self.dirs.get(self.dir_selected) else {
             return;
         };
-        if entry.is_dir {
+        if entry.path != self.dir {
             self.navigate(entry.path.clone());
         }
     }
@@ -123,102 +194,93 @@ impl Browser {
     /// Charge la piste sélectionnée sur `deck` (boutons Load du contrôleur,
     /// touches `F`/`L`, boutons souris).
     pub fn load_selected(&self, deck: Deck, tx: &LoadSender) {
-        if let Some(entry) = self.entries.get(self.selected)
-            && !entry.is_dir
-        {
+        if let Some(entry) = self.files.get(self.file_selected) {
             spawn_load_worker(entry.path.clone(), deck, tx.tx.clone(), tx.sample_rate);
         }
     }
 
     fn navigate(&mut self, dir: PathBuf) {
         self.dir = dir;
-        self.selected = 0;
-        self.scroll = 0;
         self.dirty = true;
     }
 
-    /// Rebuilds the metadata strip for the selected entry when it changed.
-    /// The audio probe reads headers only (`decode::probe_info`) — cheap,
-    /// and it runs at selection speed, not per frame.
-    fn refresh_metadata(&mut self) {
-        if self.meta_index == Some(self.selected) {
-            return;
-        }
-        self.meta_index = Some(self.selected);
-        self.meta_text = match self.entries.get(self.selected) {
-            None => String::new(),
-            Some(entry) if entry.is_dir => "dossier".into(),
-            Some(entry) => {
-                let size = std::fs::metadata(&entry.path)
-                    .map(|m| format!("{:.1} Mo", m.len() as f64 / 1_048_576.0))
-                    .unwrap_or_else(|_| "?".into());
-                let ext = entry
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(str::to_uppercase)
-                    .unwrap_or_default();
-                let info = decode::probe_info(&entry.path).unwrap_or_default();
-                let mut tech = format!("{size} · {ext}");
-                if let Some(seconds) = info.duration_seconds {
-                    let s = seconds.round() as u64;
-                    tech.push_str(&format!(" · {}:{:02}", s / 60, s % 60));
-                }
-                if let Some(rate) = info.sample_rate {
-                    tech.push_str(&format!(" · {:.1} kHz", f64::from(rate) / 1000.0));
-                }
-                if let Some(channels) = info.channels {
-                    tech.push_str(&format!(" · {channels} can."));
-                }
-                match (info.artist, info.title) {
-                    (Some(artist), Some(title)) => format!("{tech}\n{artist} — {title}"),
-                    (Some(artist), None) => format!("{tech}\n{artist}"),
-                    (None, Some(title)) => format!("{tech}\n{title}"),
-                    (None, None) => tech,
-                }
-            }
-        };
-    }
-
+    /// Lists the folder pane: "..", the current folder, its subfolders.
     fn refresh(&mut self) {
         self.dirty = false;
-        self.meta_index = None;
-        self.entries.clear();
-        // Ligne « .. » synthétique : la remontée au parent reste possible
-        // avec le seul encodeur du contrôleur.
+        self.dirs.clear();
         if let Some(parent) = self.dir.parent() {
-            self.entries.push(Entry {
+            self.dirs.push(Entry {
                 name: "..".into(),
                 path: parent.to_path_buf(),
-                is_dir: true,
             });
         }
-        let Ok(read) = std::fs::read_dir(&self.dir) else {
-            return;
-        };
+        let current = self
+            .dir
+            .file_name()
+            .map(|n| n.display().to_string())
+            .unwrap_or_else(|| self.dir.display().to_string());
+        // The current folder row: selected by default, so entering a
+        // folder immediately lists its own files in the right pane.
+        self.dir_selected = self.dirs.len();
+        self.dirs.push(Entry {
+            name: current,
+            path: self.dir.clone(),
+        });
+
         let mut listed: Vec<Entry> = Vec::new();
-        for entry in read.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().display().to_string();
-            if name.starts_with('.') {
-                continue;
-            }
-            let is_dir = path.is_dir();
-            let is_audio = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()));
-            if is_dir || is_audio {
-                listed.push(Entry { name, path, is_dir });
+        if let Ok(read) = std::fs::read_dir(&self.dir) {
+            for entry in read.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().display().to_string();
+                if name.starts_with('.') || !path.is_dir() {
+                    continue;
+                }
+                listed.push(Entry { name, path });
             }
         }
-        listed.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        self.entries.extend(listed);
-        self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+        listed.sort_by_key(|e| e.name.to_lowercase());
+        self.dirs.extend(listed);
+        self.dir_scroll = 0;
+        self.files_dirty = true;
+    }
+
+    /// Lists the file pane (audio files of the selected folder) and asks
+    /// the worker for the metadata still missing from the cache.
+    fn refresh_files(&mut self) {
+        self.files_dirty = false;
+        self.files.clear();
+        self.file_selected = 0;
+        self.file_scroll = 0;
+        let Some(selected) = self.dirs.get(self.dir_selected) else {
+            return;
+        };
+        if let Ok(read) = std::fs::read_dir(&selected.path) {
+            for entry in read.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().display().to_string();
+                if name.starts_with('.') || path.is_dir() {
+                    continue;
+                }
+                let is_audio = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()));
+                if is_audio {
+                    self.files.push(Entry { name, path });
+                }
+            }
+        }
+        self.files.sort_by_key(|e| e.name.to_lowercase());
+
+        let missing: Vec<PathBuf> = self
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| !self.meta.contains_key(p))
+            .collect();
+        if !missing.is_empty() {
+            let _ = self.probe_tx.send(missing);
+        }
     }
 }
 
@@ -228,6 +290,8 @@ impl Browser {
 pub struct BrowserView {
     pub rect_center: Vec2,
     pub rect_size: Vec2,
+    /// Width of the folder pane (mouse pane hit-testing).
+    left_width: f32,
     rows_visible: usize,
 }
 
@@ -238,24 +302,35 @@ impl BrowserView {
             .cmple(self.rect_size * 0.5)
             .all()
     }
+
+    /// Top of the row area, in screen coordinates.
+    fn list_top(&self) -> f32 {
+        self.rect_center.y + self.rect_size.y * 0.5 - 56.0
+    }
+
+    /// X of the folder/file pane split, in screen coordinates.
+    fn split_x(&self) -> f32 {
+        self.rect_center.x - self.rect_size.x * 0.5 + self.left_width
+    }
 }
 
-#[derive(Component)]
-struct Backdrop;
-#[derive(Component)]
-struct TitleText;
-#[derive(Component)]
-struct HintText;
-#[derive(Component)]
-struct MetaText;
-#[derive(Component)]
-struct Row(usize);
-#[derive(Component)]
-struct RowHighlight;
-#[derive(Component)]
-struct LoadButton(usize);
-#[derive(Component)]
-struct LoadButtonLabel(usize);
+/// Every panel entity carries this single marker: one query per system,
+/// no `Without` chains (placement, visibility and text all match on it).
+#[derive(Component, Clone, Copy, PartialEq)]
+enum Part {
+    Backdrop,
+    Divider,
+    Title,
+    Hint,
+    DirHeader,
+    FileHeader(usize),
+    DirRow(usize),
+    FileCell { row: usize, col: usize },
+    DirHighlight,
+    FileHighlight,
+    LoadButton(usize),
+    LoadLabel(usize),
+}
 
 fn spawn_browser(
     mut commands: Commands,
@@ -264,68 +339,96 @@ fn spawn_browser(
     fonts: Res<UiFonts>,
 ) {
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
-
-    commands.spawn((
-        Mesh2d(quad.clone()),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(color::SURFACE_RAISED))),
-        Transform::default(),
-        Backdrop,
-    ));
-    commands.spawn((
-        Mesh2d(quad.clone()),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(color::WIDGET_BG))),
-        Transform::default(),
-        RowHighlight,
-    ));
-    commands.spawn((
-        Text2d::new("Bibliothèque"),
-        TextFont {
-            font: fonts.text.clone().into(),
-            font_size: FontSize::Px(font::BODY),
-            ..Default::default()
-        },
-        TextColor(color::TEXT_PRIMARY),
-        Anchor::TOP_LEFT,
-        Transform::default(),
-        TitleText,
-    ));
-    commands.spawn((
-        Text2d::new("↑↓ naviguer   → entrer   F/L → deck   B fermer"),
-        TextFont {
-            font: fonts.text.clone().into(),
-            font_size: FontSize::Px(font::CAPTION),
-            ..Default::default()
-        },
-        TextColor(color::TEXT_MUTED),
-        Anchor::BOTTOM_LEFT,
-        Transform::default(),
-        HintText,
-    ));
-    commands.spawn((
-        Text2d::new(""),
-        TextFont {
-            font: fonts.text.clone().into(),
-            font_size: FontSize::Px(font::CAPTION),
-            ..Default::default()
-        },
-        TextColor(color::TEXT_MUTED),
-        Anchor::BOTTOM_LEFT,
-        Transform::default(),
-        MetaText,
-    ));
-    for index in 0..MAX_ROWS {
+    let mut quad_part = |part: Part, color: Color| {
         commands.spawn((
-            Text2d::new(""),
+            Mesh2d(quad.clone()),
+            MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
+            Transform::default(),
+            part,
+        ));
+    };
+    quad_part(Part::Backdrop, color::SURFACE_RAISED);
+    quad_part(Part::Divider, color::WIDGET_BG);
+    quad_part(Part::DirHighlight, color::WIDGET_BG);
+    quad_part(Part::FileHighlight, color::WIDGET_BG);
+    quad_part(Part::LoadButton(0), color::WIDGET_BG);
+    quad_part(Part::LoadButton(1), color::WIDGET_BG);
+
+    let text_part = |commands: &mut Commands,
+                     part: Part,
+                     text: &str,
+                     size: f32,
+                     text_color: Color,
+                     anchor: Anchor| {
+        commands.spawn((
+            Text2d::new(text),
             TextFont {
                 font: fonts.text.clone().into(),
-                font_size: FontSize::Px(font::CAPTION),
+                font_size: FontSize::Px(size),
                 ..Default::default()
             },
-            TextColor(color::TEXT_MUTED),
-            Anchor::CENTER_LEFT,
+            TextColor(text_color),
+            anchor,
             Transform::default(),
-            Row(index),
+            part,
         ));
+    };
+
+    text_part(
+        &mut commands,
+        Part::Title,
+        "Bibliothèque",
+        font::BODY,
+        color::TEXT_PRIMARY,
+        Anchor::TOP_LEFT,
+    );
+    text_part(
+        &mut commands,
+        Part::Hint,
+        "↑↓ fichiers   Maj+↑↓ dossiers   Entrée entrer   ← parent   F/L → deck   B fermer",
+        font::CAPTION,
+        color::TEXT_MUTED,
+        Anchor::BOTTOM_LEFT,
+    );
+    text_part(
+        &mut commands,
+        Part::DirHeader,
+        "Dossiers",
+        font::CAPTION,
+        color::TEXT_MUTED,
+        Anchor::CENTER_LEFT,
+    );
+    for (i, (label, _)) in COLUMNS.iter().enumerate() {
+        text_part(
+            &mut commands,
+            Part::FileHeader(i),
+            label,
+            font::CAPTION,
+            color::TEXT_MUTED,
+            Anchor::CENTER_LEFT,
+        );
+    }
+    for index in 0..MAX_DIR_ROWS {
+        text_part(
+            &mut commands,
+            Part::DirRow(index),
+            "",
+            font::CAPTION,
+            color::TEXT_MUTED,
+            Anchor::CENTER_LEFT,
+        );
+    }
+    for row in 0..MAX_FILE_ROWS {
+        for col in 0..COLUMNS.len() {
+            text_part(
+                &mut commands,
+                Part::FileCell { row, col },
+                "",
+                font::CAPTION,
+                color::TEXT_MUTED,
+                Anchor::CENTER_LEFT,
+            );
+        }
     }
     for deck in 0..2 {
         let accent = if deck == 0 {
@@ -333,29 +436,20 @@ fn spawn_browser(
         } else {
             color::DECK_B
         };
-        commands.spawn((
-            Mesh2d(quad.clone()),
-            MeshMaterial2d(materials.add(ColorMaterial::from_color(color::WIDGET_BG))),
-            Transform::default(),
-            LoadButton(deck),
-        ));
-        commands.spawn((
-            Text2d::new(if deck == 0 { "→ A" } else { "→ B" }),
-            TextFont {
-                font: fonts.text.clone().into(),
-                font_size: FontSize::Px(font::CAPTION),
-                ..Default::default()
-            },
-            TextColor(accent),
+        text_part(
+            &mut commands,
+            Part::LoadLabel(deck),
+            if deck == 0 { "→ A" } else { "→ B" },
+            font::CAPTION,
+            accent,
             Anchor::CENTER,
-            Transform::default(),
-            LoadButtonLabel(deck),
-        ));
+        );
     }
 }
 
 /// Clavier — modal quand la bibliothèque est ouverte (le contrôleur MIDI,
-/// lui, reste pleinement actif sur les decks).
+/// lui, reste pleinement actif sur les decks). Même sémantique que
+/// l'encodeur : base = fichiers, Shift = dossiers, Entrée = entrer.
 fn keys_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut browser: ResMut<Browser>,
@@ -374,16 +468,25 @@ fn keys_input(
     if keys.just_pressed(KeyCode::Escape) {
         browser.open = false;
     }
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if keys.just_pressed(KeyCode::ArrowUp) {
-        browser.scroll_by(-1);
+        if shift {
+            browser.scroll_dirs_by(-1);
+        } else {
+            browser.scroll_by(-1);
+        }
     }
     if keys.just_pressed(KeyCode::ArrowDown) {
-        browser.scroll_by(1);
+        if shift {
+            browser.scroll_dirs_by(1);
+        } else {
+            browser.scroll_by(1);
+        }
     }
     if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::Enter) {
         browser.enter();
     }
-    if keys.just_pressed(KeyCode::ArrowLeft) {
+    if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::Backspace) {
         browser.go_parent();
     }
     if keys.just_pressed(KeyCode::KeyF) {
@@ -400,7 +503,7 @@ fn mouse_input(
     mut wheel: MessageReader<MouseWheel>,
     view: Res<BrowserView>,
     mut browser: ResMut<Browser>,
-    load_buttons: Query<(&Transform, &LoadButton)>,
+    parts: Query<(&Transform, &Part)>,
     load_tx: Res<LoadSender>,
 ) {
     if !browser.open {
@@ -420,94 +523,89 @@ fn mouse_input(
         return;
     }
 
+    let in_folder_pane = point.x < view.split_x();
     for event in wheel.read() {
-        browser.scroll_by(if event.y > 0.0 { -3 } else { 3 });
+        let delta = if event.y > 0.0 { -3 } else { 3 };
+        if in_folder_pane {
+            browser.scroll_dirs_by(delta);
+        } else {
+            browser.scroll_by(delta);
+        }
     }
 
     if mouse.just_pressed(MouseButton::Left) {
-        for (transform, button) in &load_buttons {
+        for (transform, part) in &parts {
+            let Part::LoadButton(deck) = part else {
+                continue;
+            };
             let half = transform.scale.truncate() * 0.5;
             if (point - transform.translation.truncate())
                 .abs()
                 .cmple(half)
                 .all()
             {
-                let deck = if button.0 == 0 { Deck::A } else { Deck::B };
+                let deck = if *deck == 0 { Deck::A } else { Deck::B };
                 browser.load_selected(deck, &load_tx);
                 return;
             }
         }
-        // Clic sur une ligne : sélectionne ; re-clic : entre (dossier).
-        let list_top = view.rect_center.y + view.rect_size.y * 0.5 - 56.0;
+        let list_top = view.list_top();
         if point.y <= list_top {
             let index = ((list_top - point.y) / ROW_HEIGHT) as usize;
-            let target = browser.scroll + index;
-            if target < browser.entries.len() {
-                if browser.selected == target {
-                    browser.enter();
-                } else {
-                    browser.selected = target;
+            if in_folder_pane {
+                let target = browser.dir_scroll + index;
+                if target < browser.dirs.len() {
+                    if browser.dir_selected == target {
+                        browser.enter();
+                    } else {
+                        browser.dir_selected = target;
+                        browser.files_dirty = true;
+                    }
+                }
+            } else {
+                let target = browser.file_scroll + index;
+                if target < browser.files.len() {
+                    browser.file_selected = target;
                 }
             }
         }
     }
 }
 
-/// Met à jour visibilités et contenus (uniquement quand l'état change).
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn format_duration(seconds: f64) -> String {
+    let s = seconds.round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Met à jour visibilités et contenus (état + cache de métadonnées).
 fn render(
     mut browser: ResMut<Browser>,
     view: Res<BrowserView>,
-    mut rows: Query<(&mut Text2d, &mut TextColor, &mut Visibility, &Row)>,
-    mut title: Query<
-        (&mut Text2d, &mut Visibility),
-        (With<TitleText>, Without<Row>, Without<HintText>),
-    >,
-    mut hints: Query<
-        &mut Visibility,
-        (
-            With<HintText>,
-            Without<Row>,
-            Without<TitleText>,
-            Without<Backdrop>,
-            Without<MetaText>,
-        ),
-    >,
-    mut meta: Query<
-        (&mut Text2d, &mut Visibility),
-        (
-            With<MetaText>,
-            Without<Row>,
-            Without<TitleText>,
-            Without<HintText>,
-        ),
-    >,
-    mut chrome: Query<
-        &mut Visibility,
-        (
-            Or<(
-                With<Backdrop>,
-                With<RowHighlight>,
-                With<LoadButton>,
-                With<LoadButtonLabel>,
-            )>,
-            Without<Row>,
-            Without<TitleText>,
-            Without<HintText>,
-            Without<MetaText>,
-        ),
-    >,
+    mut texts: Query<(&mut Text2d, &mut TextColor, &mut Visibility, &Part)>,
+    mut chrome: Query<(&mut Visibility, &Part), Without<Text2d>>,
 ) {
+    let browser = &mut *browser;
+    while let Ok((path, info)) = browser.probe_results.try_recv() {
+        browser.meta.insert(path, info);
+    }
     if browser.dirty {
         browser.refresh();
     }
-    browser.refresh_metadata();
-    // Fenêtre de défilement autour de la sélection.
+    if browser.files_dirty {
+        browser.refresh_files();
+    }
+
+    // Fenêtres de défilement autour des sélections.
     let visible = view.rows_visible.max(1);
-    if browser.selected < browser.scroll {
-        browser.scroll = browser.selected;
-    } else if browser.selected >= browser.scroll + visible {
-        browser.scroll = browser.selected + 1 - visible;
+    if browser.dir_selected < browser.dir_scroll {
+        browser.dir_scroll = browser.dir_selected;
+    } else if browser.dir_selected >= browser.dir_scroll + visible {
+        browser.dir_scroll = browser.dir_selected + 1 - visible;
+    }
+    if browser.file_selected < browser.file_scroll {
+        browser.file_scroll = browser.file_selected;
+    } else if browser.file_selected >= browser.file_scroll + visible {
+        browser.file_scroll = browser.file_selected + 1 - visible;
     }
 
     let shown = if browser.open {
@@ -515,120 +613,177 @@ fn render(
     } else {
         Visibility::Hidden
     };
-    for mut visibility in &mut chrome {
+    for (mut visibility, _) in &mut chrome {
         *visibility = shown;
-    }
-    for mut visibility in &mut hints {
-        *visibility = shown;
-    }
-    if let Ok((mut text, mut visibility)) = title.single_mut() {
-        *visibility = shown;
-        if browser.open {
-            text.0 = format!(
-                "Bibliothèque — {}  ({}/{})",
-                browser.dir.display(),
-                (browser.selected + 1).min(browser.entries.len()),
-                browser.entries.len()
-            );
-        }
-    }
-    if let Ok((mut text, mut visibility)) = meta.single_mut() {
-        *visibility = shown;
-        if browser.open && text.0 != browser.meta_text {
-            text.0.clone_from(&browser.meta_text);
-        }
     }
 
-    for (mut text, mut text_color, mut visibility, row) in &mut rows {
-        let index = browser.scroll + row.0;
-        let entry = browser.entries.get(index);
-        let visible_row = browser.open && row.0 < visible && entry.is_some();
-        *visibility = if visible_row {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if let Some(entry) = entry
-            && visible_row
-        {
-            let icon = if entry.is_dir { "▸" } else { "♪" };
-            text.0 = format!("{icon} {}", entry.name);
-            text_color.0 = if index == browser.selected {
-                color::TEXT_PRIMARY
-            } else {
-                color::TEXT_MUTED
-            };
+    for (mut text, mut text_color, mut visibility, part) in &mut texts {
+        match *part {
+            Part::Title => {
+                *visibility = shown;
+                if browser.open {
+                    text.0 = format!(
+                        "Bibliothèque — {}  ({}/{})",
+                        browser.dir.display(),
+                        (browser.file_selected + 1).min(browser.files.len()),
+                        browser.files.len()
+                    );
+                }
+            }
+            Part::DirRow(index) => {
+                let i = browser.dir_scroll + index;
+                let entry = browser.dirs.get(i);
+                let visible_row = browser.open && index < visible && entry.is_some();
+                *visibility = if visible_row {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                if let Some(entry) = entry
+                    && visible_row
+                {
+                    let icon = if entry.path == browser.dir {
+                        "▾"
+                    } else {
+                        "▸"
+                    };
+                    text.0 = format!("{icon} {}", entry.name);
+                    text_color.0 = if i == browser.dir_selected {
+                        color::TEXT_PRIMARY
+                    } else {
+                        color::TEXT_MUTED
+                    };
+                }
+            }
+            Part::FileCell { row, col } => {
+                let i = browser.file_scroll + row;
+                let entry = browser.files.get(i);
+                let visible_row = browser.open && row < visible && entry.is_some();
+                *visibility = if visible_row {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                if let Some(entry) = entry
+                    && visible_row
+                {
+                    let meta = browser.meta.get(&entry.path);
+                    text.0 = match col {
+                        0 => {
+                            let title = meta
+                                .and_then(|m| m.title.as_deref())
+                                .unwrap_or(entry.name.as_str());
+                            format!("♪ {title}")
+                        }
+                        1 => meta
+                            .and_then(|m| m.artist.clone())
+                            .unwrap_or_else(|| "—".into()),
+                        2 => meta
+                            .and_then(|m| m.bpm)
+                            .map_or_else(|| "—".into(), |bpm| format!("{bpm:.0}")),
+                        _ => meta
+                            .and_then(|m| m.duration_seconds)
+                            .map_or_else(|| "…".into(), format_duration),
+                    };
+                    text_color.0 = if i == browser.file_selected {
+                        color::TEXT_PRIMARY
+                    } else {
+                        color::TEXT_MUTED
+                    };
+                }
+            }
+            _ => *visibility = shown,
         }
     }
 }
 
-/// Géométrie du panneau (fractions de fenêtre) et placement des entités.
-#[allow(clippy::type_complexity)]
+/// Géométrie du panneau (moitié basse de l'écran) et placement des entités.
 fn place(
     windows: Query<&Window>,
     browser: Res<Browser>,
     mut view: ResMut<BrowserView>,
-    mut sets: ParamSet<(
-        Query<&mut Transform, With<Backdrop>>,
-        Query<&mut Transform, With<TitleText>>,
-        Query<&mut Transform, With<HintText>>,
-        Query<(&mut Transform, &Row)>,
-        Query<&mut Transform, With<RowHighlight>>,
-        Query<(&mut Transform, &LoadButton)>,
-        Query<(&mut Transform, &LoadButtonLabel)>,
-        Query<&mut Transform, With<MetaText>>,
-    )>,
+    mut parts: Query<(&mut Transform, &Part)>,
 ) {
     let Ok(window) = windows.single() else { return };
     let (w, h) = (window.width(), window.height());
-    let width = (w * 0.30).clamp(300.0, 500.0).min(w - 2.0 * layout::MARGIN);
-    let height = h - 2.0 * layout::MARGIN;
-    let center = Vec2::new(w * 0.5 - width * 0.5 - layout::MARGIN, 0.0);
+    // Bottom half: from just under the screen middle down to the margin.
+    let top = -layout::GAP;
+    let bottom = -h * 0.5 + layout::MARGIN;
+    let width = w - 2.0 * layout::MARGIN;
+    let height = (top - bottom).max(120.0);
+    let center = Vec2::new(0.0, (top + bottom) * 0.5);
+    let left_width = (width * 0.26).clamp(200.0, 380.0);
 
     let list_top = height * 0.5 - 56.0;
-    let footer = -height * 0.5 + 40.0;
+    let footer = -height * 0.5 + 26.0;
     view.rect_center = center;
     view.rect_size = Vec2::new(width, height);
-    // The list fills the panel down to the metadata strip whatever the
-    // window height (the row pool is sized accordingly).
-    let list_bottom = -height * 0.5 + META_TOP;
-    view.rows_visible = (((list_top - list_bottom) / ROW_HEIGHT) as usize).min(MAX_ROWS);
+    view.left_width = left_width;
+    view.rows_visible = (((list_top - footer - 6.0) / ROW_HEIGHT) as usize)
+        .min(MAX_DIR_ROWS)
+        .min(MAX_FILE_ROWS);
 
-    if let Ok(mut transform) = sets.p0().single_mut() {
-        transform.translation = center.extend(10.0);
-        transform.scale = Vec3::new(width, height, 1.0);
-    }
-    if let Ok(mut transform) = sets.p1().single_mut() {
-        transform.translation = Vec3::new(center.x - width * 0.5 + 12.0, height * 0.5 - 10.0, 11.0);
-    }
-    if let Ok(mut transform) = sets.p2().single_mut() {
-        transform.translation = Vec3::new(center.x - width * 0.5 + 12.0, -height * 0.5 + 8.0, 11.0);
-    }
-    for (mut transform, row) in &mut sets.p3() {
-        let y = list_top - (row.0 as f32 + 0.5) * ROW_HEIGHT;
-        transform.translation = Vec3::new(center.x - width * 0.5 + 14.0, y, 11.0);
-    }
-    // Surbrillance de la ligne sélectionnée.
-    let selected_offset = browser.selected.saturating_sub(browser.scroll) as f32;
-    if let Ok(mut transform) = sets.p4().single_mut() {
-        let y = list_top - (selected_offset + 0.5) * ROW_HEIGHT;
-        transform.translation = Vec3::new(center.x, y, 10.5);
-        transform.scale = Vec3::new(width - 12.0, ROW_HEIGHT - 2.0, 1.0);
-    }
-    for (mut transform, button) in &mut sets.p5() {
-        let x = center.x + (button.0 as f32 - 0.5) * 96.0;
-        transform.translation = Vec3::new(x, footer - 12.0, 11.0);
-        transform.scale = Vec3::new(84.0, 26.0, 1.0);
-    }
-    for (mut transform, label) in &mut sets.p6() {
-        let x = center.x + (label.0 as f32 - 0.5) * 96.0;
-        transform.translation = Vec3::new(x, footer - 12.0, 12.0);
-    }
-    if let Ok(mut transform) = sets.p7().single_mut() {
-        transform.translation = Vec3::new(
-            center.x - width * 0.5 + 12.0,
-            -height * 0.5 + META_BASELINE,
-            11.0,
-        );
+    let left_x = center.x - width * 0.5;
+    let file_x = left_x + left_width + layout::GAP * 2.0;
+    let file_width = width - left_width - layout::GAP * 4.0;
+    let header_y = center.y + height * 0.5 - 40.0;
+    let selected_dir_offset = browser.dir_selected.saturating_sub(browser.dir_scroll) as f32;
+    let selected_file_offset = browser.file_selected.saturating_sub(browser.file_scroll) as f32;
+
+    for (mut transform, part) in &mut parts {
+        match *part {
+            Part::Backdrop => {
+                transform.translation = center.extend(10.0);
+                transform.scale = Vec3::new(width, height, 1.0);
+            }
+            Part::Divider => {
+                transform.translation =
+                    Vec3::new(left_x + left_width + layout::GAP, center.y, 10.4);
+                transform.scale = Vec3::new(2.0, height - 16.0, 1.0);
+            }
+            Part::Title => {
+                transform.translation =
+                    Vec3::new(left_x + 12.0, center.y + height * 0.5 - 10.0, 11.0);
+            }
+            Part::Hint => {
+                transform.translation =
+                    Vec3::new(left_x + 12.0, center.y - height * 0.5 + 6.0, 11.0);
+            }
+            Part::DirHeader => {
+                transform.translation = Vec3::new(left_x + 14.0, header_y, 11.0);
+            }
+            Part::FileHeader(col) => {
+                let x = file_x + COLUMNS[col].1 * file_width;
+                transform.translation = Vec3::new(x, header_y, 11.0);
+            }
+            Part::DirRow(index) => {
+                let y = center.y + list_top - (index as f32 + 0.5) * ROW_HEIGHT;
+                transform.translation = Vec3::new(left_x + 14.0, y, 11.0);
+            }
+            Part::FileCell { row, col } => {
+                let y = center.y + list_top - (row as f32 + 0.5) * ROW_HEIGHT;
+                let x = file_x + COLUMNS[col].1 * file_width;
+                transform.translation = Vec3::new(x, y, 11.0);
+            }
+            Part::DirHighlight => {
+                let y = center.y + list_top - (selected_dir_offset + 0.5) * ROW_HEIGHT;
+                transform.translation = Vec3::new(left_x + left_width * 0.5, y, 10.5);
+                transform.scale = Vec3::new(left_width - 8.0, ROW_HEIGHT - 2.0, 1.0);
+            }
+            Part::FileHighlight => {
+                let y = center.y + list_top - (selected_file_offset + 0.5) * ROW_HEIGHT;
+                transform.translation = Vec3::new(file_x + file_width * 0.5 - 8.0, y, 10.5);
+                transform.scale = Vec3::new(file_width - 8.0, ROW_HEIGHT - 2.0, 1.0);
+            }
+            Part::LoadButton(deck) => {
+                let x = center.x + width * 0.5 - 150.0 + deck as f32 * 96.0;
+                transform.translation = Vec3::new(x, center.y + footer, 11.0);
+                transform.scale = Vec3::new(84.0, 26.0, 1.0);
+            }
+            Part::LoadLabel(deck) => {
+                let x = center.x + width * 0.5 - 150.0 + deck as f32 * 96.0;
+                transform.translation = Vec3::new(x, center.y + footer, 12.0);
+            }
+        }
     }
 }
