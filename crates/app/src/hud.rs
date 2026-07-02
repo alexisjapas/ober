@@ -171,13 +171,14 @@ fn layout_texts(
         } else {
             half_w - layout::MARGIN
         };
-        transform.translation = Vec3::new(x, half_h - layout::MARGIN * 0.6, 2.0);
+        transform.translation =
+            crate::theme::snap(Vec3::new(x, half_h - layout::MARGIN * 0.6, 2.0));
     }
     if let Ok(mut transform) = status_texts.single_mut() {
-        transform.translation = Vec3::new(
+        transform.translation = crate::theme::snap(Vec3::new(
             -half_w + layout::MARGIN,
             -half_h + layout::MARGIN * 0.6,
             2.0,
-        );
+        ));
     }
 }

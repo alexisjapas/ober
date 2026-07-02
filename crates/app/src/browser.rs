@@ -740,7 +740,7 @@ fn place(
     for (mut transform, part) in &mut parts {
         match *part {
             Part::Backdrop => {
-                transform.translation = center.extend(10.0);
+                transform.translation = crate::theme::snap(center.extend(10.0));
                 transform.scale = Vec3::new(width, height, 1.0);
             }
             Part::Divider => {
@@ -757,39 +757,42 @@ fn place(
                     Vec3::new(left_x + 12.0, center.y - height * 0.5 + 6.0, 11.0);
             }
             Part::DirHeader => {
-                transform.translation = Vec3::new(left_x + 14.0, header_y, 11.0);
+                transform.translation =
+                    crate::theme::snap(Vec3::new(left_x + 14.0, header_y, 11.0));
             }
             Part::FileHeader(col) => {
                 let x = file_x + COLUMNS[col].1 * file_width;
-                transform.translation = Vec3::new(x, header_y, 11.0);
+                transform.translation = crate::theme::snap(Vec3::new(x, header_y, 11.0));
             }
             Part::DirRow(index) => {
                 let y = center.y + list_top - (index as f32 + 0.5) * ROW_HEIGHT;
-                transform.translation = Vec3::new(left_x + 14.0, y, 11.0);
+                transform.translation = crate::theme::snap(Vec3::new(left_x + 14.0, y, 11.0));
             }
             Part::FileCell { row, col } => {
                 let y = center.y + list_top - (row as f32 + 0.5) * ROW_HEIGHT;
                 let x = file_x + COLUMNS[col].1 * file_width;
-                transform.translation = Vec3::new(x, y, 11.0);
+                transform.translation = crate::theme::snap(Vec3::new(x, y, 11.0));
             }
             Part::DirHighlight => {
                 let y = center.y + list_top - (selected_dir_offset + 0.5) * ROW_HEIGHT;
-                transform.translation = Vec3::new(left_x + left_width * 0.5, y, 10.5);
+                transform.translation =
+                    crate::theme::snap(Vec3::new(left_x + left_width * 0.5, y, 10.5));
                 transform.scale = Vec3::new(left_width - 8.0, ROW_HEIGHT - 2.0, 1.0);
             }
             Part::FileHighlight => {
                 let y = center.y + list_top - (selected_file_offset + 0.5) * ROW_HEIGHT;
-                transform.translation = Vec3::new(file_x + file_width * 0.5 - 8.0, y, 10.5);
+                transform.translation =
+                    crate::theme::snap(Vec3::new(file_x + file_width * 0.5 - 8.0, y, 10.5));
                 transform.scale = Vec3::new(file_width - 8.0, ROW_HEIGHT - 2.0, 1.0);
             }
             Part::LoadButton(deck) => {
                 let x = center.x + width * 0.5 - 150.0 + deck as f32 * 96.0;
-                transform.translation = Vec3::new(x, center.y + footer, 11.0);
+                transform.translation = crate::theme::snap(Vec3::new(x, center.y + footer, 11.0));
                 transform.scale = Vec3::new(84.0, 26.0, 1.0);
             }
             Part::LoadLabel(deck) => {
                 let x = center.x + width * 0.5 - 150.0 + deck as f32 * 96.0;
-                transform.translation = Vec3::new(x, center.y + footer, 12.0);
+                transform.translation = crate::theme::snap(Vec3::new(x, center.y + footer, 12.0));
             }
         }
     }

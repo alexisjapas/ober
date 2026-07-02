@@ -37,6 +37,18 @@ struct WaveformParams {
 const TEX_WIDTH: f32 = 4096.0;
 // theme::color::SURFACE
 const SURFACE: vec3<f32> = vec3<f32>(0.045, 0.05, 0.07);
+// Demi-largeur de la tête de lecture, fraction du quad.
+const PLAYHEAD_HALF: f32 = 0.0015;
+
+// Point d'overview à l'index linéaire donné (la texture enroule les points
+// par lignes de TEX_WIDTH). `textureLoad` : Rgba32Float n'est pas filtrable
+// en hardware, l'interpolation linéaire se fait dans `fragment`.
+fn overview_point(index: f32, points: f32) -> vec4<f32> {
+    let i = clamp(index, 0.0, points - 1.0);
+    let xi = i32(i % TEX_WIDTH);
+    let yi = i32(i / TEX_WIDTH);
+    return textureLoad(overview, vec2<i32>(xi, yi), 0);
+}
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
@@ -45,42 +57,50 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // Amplitude verticale [0, 1] depuis l'axe médian.
     let y = abs(1.0 - mesh.uv.y * 2.0);
 
+    // Dérivées écran (≈ un pixel), calculées en flot de contrôle uniforme.
+    // Le MSAA n'agit que sur les arêtes de géométrie : chaque bord dessiné
+    // PAR le shader (enveloppe, grille, tête) est adouci sur cette largeur.
+    let aa_y = fwidth(y);
+    let aa_u = fwidth(u);
+    let aa_x = fwidth(mesh.uv.x);
+
     var color = SURFACE;
     if u >= 0.0 && u < 1.0 && params.points > 0.0 {
-        // La texture enroule les points par lignes de TEX_WIDTH.
-        let idx = u * params.points;
-        let x = (idx % TEX_WIDTH) / TEX_WIDTH;
-        let row = floor(idx / TEX_WIDTH);
-        let rows = f32(textureDimensions(overview).y);
-        let v = (row + 0.5) / rows;
-        let d = textureSampleLevel(overview, overview_sampler, vec2<f32>(x, v), 0.0);
+        // Interpolation linéaire manuelle entre points adjacents : pas de
+        // colonnes dures au zoom (le sampler est nearest sur ce format).
+        let idx = u * params.points - 0.5;
+        let base = floor(idx);
+        let d = mix(
+            overview_point(base, params.points),
+            overview_point(base + 1.0, params.points),
+            idx - base,
+        );
 
         // Teinte = mélange des bandes pondéré par leur énergie.
         let total = d.r + d.g + d.b + 1e-5;
         let tint = (params.tint_low.rgb * d.r + params.tint_mid.rgb * d.g
             + params.tint_high.rgb * d.b) / total;
 
-        // Silhouette crête (sombre) + cœur RMS (lumineux).
-        if y <= d.a {
-            color = mix(SURFACE, tint, 0.4);
-        }
-        if y <= min(total, d.a) {
-            color = tint;
-        }
+        // Silhouette crête (sombre) + cœur RMS (lumineux), arêtes adoucies.
+        let peak = 1.0 - smoothstep(d.a - aa_y, d.a + aa_y, y);
+        color = mix(color, mix(SURFACE, tint, 0.4), peak);
+        let core_level = min(total, d.a);
+        let core = 1.0 - smoothstep(core_level - aa_y, core_level + aa_y, y);
+        color = mix(color, tint, core);
 
-        // Beatgrid en surimpression (specs §6.3).
+        // Beatgrid en surimpression (specs §6.3), feather d'un pixel.
         if params.first_beat >= 0.0 && params.beat_period > 0.0 {
             let rel = (u - params.first_beat) / params.beat_period;
             let dist = abs(rel - round(rel)) * params.beat_period;
-            if dist < params.grid_width {
-                color = mix(color, params.grid_color.rgb, 0.55);
-            }
+            let line =
+                1.0 - smoothstep(params.grid_width - aa_u, params.grid_width + aa_u, dist);
+            color = mix(color, params.grid_color.rgb, 0.55 * line);
         }
     }
 
-    // Tête de lecture fixe au centre.
-    if abs(mesh.uv.x - 0.5) < 0.0015 {
-        color = params.playhead_color.rgb;
-    }
+    // Tête de lecture fixe au centre, bords adoucis.
+    let head =
+        1.0 - smoothstep(PLAYHEAD_HALF - aa_x, PLAYHEAD_HALF + aa_x, abs(mesh.uv.x - 0.5));
+    color = mix(color, params.playhead_color.rgb, head);
     return vec4<f32>(color, 1.0);
 }

@@ -345,13 +345,13 @@ fn place_widgets(
             1 => deck_zone(1, w),
             _ => (0.0, w * 0.36),
         };
-        transform.translation = Vec3::new(x, bands.controls_center, 2.0);
+        transform.translation = crate::theme::snap(Vec3::new(x, bands.controls_center, 2.0));
         transform.scale = Vec3::new(width + layout::GAP * 2.0, bands.controls_height, 1.0);
     }
 
     for (mut transform, widget) in &mut sets.p0() {
         let (center, size) = slot(*widget, &window);
-        transform.translation = center.extend(3.0);
+        transform.translation = crate::theme::snap(center.extend(3.0));
         transform.scale = Vec3::new(size.x, size.y, 1.0);
     }
 
@@ -385,7 +385,7 @@ fn place_widgets(
                 Vec2::new(size.x, extent),
             )
         };
-        transform.translation = (center + offset).extend(3.5);
+        transform.translation = crate::theme::snap((center + offset).extend(3.5));
         transform.scale = Vec3::new(fill_size.x.max(0.5), fill_size.y.max(0.5), 1.0);
     }
 
@@ -397,7 +397,7 @@ fn place_widgets(
         } else {
             (Vec2::new(0.0, t * size.y), Vec2::new(size.x + 10.0, 6.0))
         };
-        transform.translation = (center + offset).extend(4.0);
+        transform.translation = crate::theme::snap((center + offset).extend(4.0));
         transform.scale = Vec3::new(thumb_size.x, thumb_size.y, 1.0);
     }
 
@@ -407,7 +407,7 @@ fn place_widgets(
             Widget::Button(_) => center,
             Widget::Slider(_) => center - Vec2::new(0.0, size.y * 0.5 + 11.0),
         };
-        transform.translation = position.extend(5.0);
+        transform.translation = crate::theme::snap(position.extend(5.0));
     }
 }
 

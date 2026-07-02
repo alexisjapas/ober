@@ -389,7 +389,7 @@ fn layout(windows: Query<&Window>, mut quads: Query<(&mut Transform, &WaveformQu
     let Ok(window) = windows.single() else { return };
     let bands = theme::layout::bands(window.width(), window.height());
     for (mut transform, quad) in &mut quads {
-        transform.translation = Vec3::new(0.0, bands.wave_center[quad.0], 0.0);
+        transform.translation = crate::theme::snap(Vec3::new(0.0, bands.wave_center[quad.0], 0.0));
         transform.scale = Vec3::new(bands.wave_width, bands.wave_height, 1.0);
     }
 }

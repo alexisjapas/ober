@@ -159,6 +159,14 @@ pub mod easing {
     }
 }
 
+/// Snaps a translation to whole logical pixels. The percentage layout
+/// yields fractional positions; texts and hard quad edges sitting between
+/// pixels render soft — one rounding at placement time keeps them crisp
+/// (`z` untouched, it orders the layers).
+pub fn snap(translation: Vec3) -> Vec3 {
+    Vec3::new(translation.x.round(), translation.y.round(), translation.z)
+}
+
 /// Convertit une couleur du thème en `Vec4` linéaire pour un uniform WGSL.
 pub fn to_linear_vec4(color: Color) -> Vec4 {
     let linear = color.to_linear();
