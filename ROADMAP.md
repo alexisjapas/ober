@@ -109,17 +109,26 @@ Objectif : mixer 2 pistes au clavier, sortie stéréo sur le périphérique par 
 
 ## M6 — UI
 
-- [ ] Module `theme` : tokens de couleur sémantiques, échelle typo, rayons, espacements, courbes d'easing centralisées ; consommé par les materials **et** le style egui (§6.2)
+**M6a (fait)** :
+
+- [x] Module `theme` : tokens de couleur sémantiques, échelle typo, espacements, courbes d'easing centralisées — consommé par tous les materials et textes ; style egui au M6b (§6.2)
+- [x] Waveforms en shader WGSL : summary **3 bandes** (teintes pondérées par l'énergie), **mipmaps 1×/4×/16×** (textures pré-décimées, échangées selon le zoom), uploadées une fois au chargement, scroll/zoom par uniforms — **aucune régénération de mesh par frame** (§6.1)
+- [x] Position affichée extrapolée (`position + vitesse × Δt`), correction douce sans snap, rattrapage sur seek (§6.1)
+- [x] Beatgrid en surimpression dans le shader (dès l'arrivée de l'analyse asynchrone), tête de lecture fixe centrée, **zoom molette** 2–180 s (§6.1/§6.3)
+- [x] VU-mètres master : quad + uniforms, zones ok/warn/clip du thème, attaque/retour lissés et peak-hold décroissant via `theme::easing` (§6.1/§6.3)
+- [x] Textes : panneau deck (titre, BPM, position/temps restant, pitch, volume, cue) + barre d'état (périph/canaux/buffer, contrôleur MIDI, mix, VU, underruns, charge audio, fps lissé) (§6.3)
+- [x] Les interactions UI (clavier) émettent les mêmes `mapping::Action` que le MIDI, routées par `midi::to_engine_command` — un seul chemin (§6.4) ; action `Seek` ajoutée
+- [x] Mode idle : 10 fps via `WinitSettings` après > 5 s sans lecture, jog ni interaction ; retour immédiat en `Continuous` ; le thread audio jamais affecté (§6.5)
+- [x] Animations basées sur le temps réel (dt), jamais sur le compteur de frames — compatible 120/144 Hz (§6.1)
+
+**M6b (restant)** :
+
 - [ ] Fonts : Inter + Phosphor Icons — récupérer le module `fonts.rs` des projets internes et les assets dans `assets/fonts/` (§6.2)
-- [ ] Waveforms en shader WGSL : mipmaps min/max/RMS (1×/4×/16×) uploadées une fois au chargement, scroll/zoom par uniforms — **aucune régénération de mesh par frame** (§6.1)
-- [ ] Position affichée extrapolée (`position + vitesse × Δt`), correction douce sans snap (§6.1)
-- [ ] VU-mètres par instancing (quad + uniforms), beatgrid en surimpression, tête de lecture fixe centrée, zoom molette (§6.1/§6.3)
-- [ ] Écran unique complet : 2 waveforms, panneaux deck (titre/BPM/temps restant, play/cue, sliders fallback souris, indicateur cue), section centrale (crossfader, VU master, gains casque), barre d'état (périph audio, contrôleur, underruns, charge CPU audio, fps) (§6.3)
-- [ ] Les interactions UI émettent les mêmes `Action` que le MIDI — un seul chemin (§6.4)
-- [ ] `bevy_egui` pour les panneaux secondaires uniquement (préférences, debug) — **valider la compat bevy_egui 0.41 ↔ bevy 0.19 avant usage** ; file picker `rfd` (§6.1/§6.3)
+- [ ] Boutons play/cue cliquables et sliders volume/EQ/pitch/crossfader à la souris (picking Bevy → mêmes `Action`) (§6.3)
+- [ ] File picker natif `rfd` (bouton Load + action MIDI Load) (§6.3)
+- [ ] `bevy_egui` 0.41 (compatible bevy 0.19 ✓) pour les panneaux secondaires : préférences, debug — stylé par `theme` (§6.1/§6.2)
 - [ ] Ring texture du spectrogramme préparée (structure en place, activation v0.2) (§6.1)
-- [ ] Mode idle : 10 fps via `WinitSettings` après > 5 s sans lecture ni interaction, retour immédiat au framerate natif ; le thread audio n'est jamais affecté ; mesurer sur laptop (§6.5)
-- [ ] Support écrans 120/144 Hz : animations basées sur le temps réel, jamais sur le compteur de frames (§6.1)
+- [ ] **Validation matérielle** : session de mix complète au contrôleur, framerate natif stable (vérifier sur 120/144 Hz), frame CPU+GPU < 8 ms, idle mesuré sur laptop
 
 **Sortie** : session de mix complète au contrôleur, framerate natif stable, frame CPU+GPU < 8 ms.
 
