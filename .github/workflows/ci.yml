@@ -1,3 +1,8 @@
+# Continuous integration — every push to main and every PR must keep the four
+# gates green (CONSTITUTION-DEV Rules 2, 3): formatting, clippy at zero
+# warnings, tests on the three shipped platforms, and the Bevy boundary.
+# `--locked` everywhere: CI builds exactly what Cargo.lock records — a drifted
+# lockfile fails loudly instead of resolving silently.
 name: CI
 
 on:
@@ -13,7 +18,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -23,14 +28,14 @@ jobs:
     name: clippy (-D warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Dépendances système
+      - uses: actions/checkout@v7
+      - name: System dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test:
     name: tests (${{ matrix.os }})
@@ -40,19 +45,34 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Dépendances système (Linux)
+      - uses: actions/checkout@v7
+      - name: System dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
 
-  # Pas de test matériel en CI : la checklist manuelle contrôleur vit dans TESTING.md.
-  bevy-boundary:
-    name: frontière Bevy (specs §1.4)
+  # The real-time guard rails (Rule 1) are compile-checked: the `rt-checks`
+  # feature wires assert_no_alloc into the audio callback. It only bites at
+  # runtime in debug, but a build failure here means the feature gate rotted.
+  rt-checks:
+    name: rt-checks feature (specs §2.2)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p engine --features rt-checks
+
+  # No hardware test in CI: the manual controller checklist lives in TESTING.md
+  # (Rule 8).
+  bevy-boundary:
+    name: Bevy boundary (specs §1.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: bash scripts/check-bevy-boundary.sh
