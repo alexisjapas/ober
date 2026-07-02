@@ -59,7 +59,7 @@ pub enum Action {
     JogBend {
         deck: Deck,
     },
-    /// Touch capacitif du jog (M4).
+    /// Touch capacitif du jog.
     JogTouch {
         deck: Deck,
     },

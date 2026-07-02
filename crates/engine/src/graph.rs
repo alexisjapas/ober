@@ -38,7 +38,7 @@ pub struct EnginePorts {
     pub snapshots: triple_buffer::Output<EngineSnapshot>,
     /// Buffers de piste renvoyés par le callback, à désallouer ici.
     pub reclaim: rtrb::Consumer<Arc<TrackBuffer>>,
-    /// Samples master post-limiteur pour les analyseurs temps réel (M5).
+    /// Samples master post-limiteur pour le bus d'analyseurs temps réel.
     pub tap: rtrb::Consumer<f32>,
 }
 

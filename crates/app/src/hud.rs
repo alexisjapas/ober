@@ -1,7 +1,6 @@
 //! Textes de l'écran unique (specs §6.3) : par deck (titre, BPM, temps
 //! restant, pitch, cue) et barre d'état (périphérique audio, contrôleur,
-//! underruns, charge CPU audio, fps). `Text2d` + tokens du thème — Inter et
-//! Phosphor arrivent au M6b dans `assets/fonts/`.
+//! underruns, charge CPU audio, fps). `Text2d` en Inter + tokens du thème.
 
 use bevy::prelude::*;
 use bevy::sprite::Anchor;

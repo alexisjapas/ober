@@ -1,13 +1,12 @@
 //! Design system d'ober (specs §6.2) : tokens sémantiques consommés par les
-//! materials, les textes et (M6b) le style egui. Aucune couleur, durée ou
+//! materials, les textes et le style egui (panel.rs). Aucune couleur, durée ou
 //! espacement codé en dur ailleurs dans la couche UI.
 //!
-//! Fonts cibles : Inter (texte) + Phosphor Icons — vendorisées au M6b dans
-//! `assets/fonts/` ; en attendant, la police par défaut de Bevy est utilisée
-//! via les tailles définies ici.
+//! Fonts : Inter (texte) + Phosphor Icons — vendorisées et embarquées par
+//! `fonts.rs` (crates/app/src/fonts/), aux tailles définies ici.
 
 // Le design system définit l'ensemble du vocabulaire visuel ; certains
-// tokens attendent leurs consommateurs (widgets M6b, style egui).
+// tokens attendent encore leurs consommateurs (itérations design à venir).
 #![allow(dead_code)]
 
 use bevy::prelude::*;
@@ -58,7 +57,7 @@ pub mod color {
     pub const THUMB: Color = srgb(0.80, 0.82, 0.88);
 }
 
-/// Échelle typographique (px) — Inter au M6b.
+/// Échelle typographique (px), rendue en Inter.
 pub mod font {
     pub const TITLE: f32 = 18.0;
     pub const BODY: f32 = 14.0;

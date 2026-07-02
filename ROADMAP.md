@@ -5,20 +5,53 @@ objectif démontrable et un **critère de sortie mesurable** ; on n'entame pas u
 jalon tant que le critère du précédent n'est pas tenu. Exception voulue : le
 *spike waveform shader* se mène en parallèle de M3–M4 (dérisquage de M6, §9).
 
-## Vue d'ensemble
+## Vue d'ensemble (état au 2026-07-02)
 
 | Jalon | Contenu | Critère de sortie | Statut |
 |---|---|---|---|
-| **M0** | Scaffolding : workspace, flake nix, CI, squelettes de types | `cargo test` vert dans `nix develop`, CI verte | 🟡 quasi fait |
-| **M1** | Moteur audio : engine + decode, 2 decks au clavier, volume/crossfader, sortie stéréo | Mix 2 pistes sans underrun, latence mesurée ≤ 10 ms | ⬜ |
-| **M2** | DSP : EQ 3 bandes, varispeed Hermite, limiteur, cue 4 canaux | Pré-écoute casque fonctionnelle sur l'Inpulse | ⬜ |
-| **M3** | MIDI in : midir, moteur de mapping RON, mapping Inpulse (hors jogs) | Tous faders/potards/boutons opérants | ⬜ |
-| **M4** | Jogs : modèle scratch/bend à inertie | Scratch propre à l'oreille, pas d'artefacts | ⬜ |
-| **M5** | Feedback LED + analyse offline (BPM/beatgrid/waveform) | LEDs synchronisées, BPM ±0,1 sur corpus | ⬜ |
-| **M6** | UI : waveforms shader, design system, mode idle, file picker | Session de mix complète au contrôleur, frame < 8 ms | ⬜ |
+| **M0** | Scaffolding : workspace, flake nix, CI, squelettes de types | `cargo test` vert dans `nix develop`, CI verte | 🟡 reste `LICENSE` |
+| **M1** | Moteur audio : engine + decode, 2 decks au clavier, volume/crossfader, sortie stéréo | Mix 2 pistes sans underrun, latence mesurée ≤ 10 ms | ✅ code+CI · 🎧 latence à mesurer |
+| **M2** | DSP : EQ 3 bandes, varispeed Hermite, limiteur, cue 4 canaux | Pré-écoute casque fonctionnelle sur l'Inpulse | ✅ code+CI · stream 4 canaux **validé sur le MK2** · 🎧 écoute |
+| **M3** | MIDI in : midir, moteur de mapping RON, mapping Inpulse (hors jogs) | Tous faders/potards/boutons opérants | ✅ code+CI · 🎧 codes MK2 au midi-probe |
+| **M4** | Jogs : modèle scratch/bend à inertie | Scratch propre à l'oreille, pas d'artefacts | ✅ code+CI · 🎧 réglages à l'oreille |
+| **Spike** | Prototype waveform shader (dérisquage M6) | Architecture §6.1 validée en réel | ✅ |
+| **M5** | Feedback LED + analyse offline (BPM/beatgrid/waveform) | LEDs synchronisées, BPM ±0,1 sur corpus | ✅ code+CI (corpus ±0,1 ✓) · 🎧 LEDs |
+| **M6** | UI : waveforms shader, design system, mode idle, bibliothèque | Session de mix complète au contrôleur, frame < 8 ms | ✅ code+CI · 🎧 session complète |
 
-M1–M2 concentrent le risque technique (temps réel, carte son 4 canaux).
-M4 demande des itérations à l'oreille avec le matériel physique.
+Légende : ✅ implémenté, testé, CI verte sur les 3 OS · 🎧 validation
+matérielle restante (checklists [TESTING.md](TESTING.md)).
+
+---
+
+## Reprendre le travail (session vierge)
+
+```sh
+nix develop                                   # ou `direnv allow`
+cargo test --workspace                        # 60 tests
+cargo clippy --workspace --all-targets -- -D warnings
+./scripts/check-bevy-boundary.sh              # frontière Bevy (§1.4)
+cargo run -p app                              # l'application (binaire `ober`)
+cargo run -p midi --bin midi-probe            # rétro-ingénierie MIDI
+cargo bench -p engine --bench callback        # budget temps réel
+```
+
+Toute la connaissance du projet vit dans le dépôt : specs verbatim dans
+[docs/SPECS.md](docs/SPECS.md), conventions et architecture dans
+[CLAUDE.md](CLAUDE.md), latence dans [docs/latence.md](docs/latence.md).
+
+**Prochaines actions, dans l'ordre :**
+
+1. **Validations matérielles** (Inpulse 200 MK2 branché) — dérouler les
+   checklists de [TESTING.md](TESTING.md) : codes MIDI réels du MK2 au
+   `midi-probe` (le mapping vient de l'Inpulse 200 v1 → corriger
+   `mappings/hercules_inpulse_200_mk2.ron`, rechargé sans recompiler),
+   pré-écoute casque, scratch à l'oreille (paramètres `jog:` du RON),
+   LEDs, session complète.
+2. **Latence** : le MK2 impose 1114 frames (≈ 23 ms) en 4 canaux ALSA brut
+   — explorer le nœud PipeWire et 44,1 kHz (cf. docs/latence.md), sinon
+   documenter la contrainte.
+3. **Licence** : confirmer GPL-3.0 et ajouter `LICENSE` (dernière case M0).
+4. **v0.2** : voir « Après le POC » en fin de document.
 
 ---
 
@@ -31,8 +64,8 @@ M4 demande des itérations à l'oreille avec le matériel physique.
 - [x] Squelettes de types : `EngineCommand`/`EngineSnapshot`, `DecodedTrack`, `Analyzer`/`AnalysisFrame`, `Action`/`Mapping` RON
 - [x] `midi-probe` opérationnel (log hex de tous les ports d'entrée)
 - [x] `cargo test --workspace`, `clippy -D warnings`, `fmt` et frontière Bevy verts dans `nix develop` (Rust 1.96.1, Linux)
+- [x] Pousser sur un remote (github.com/alexisjapas/ober) — CI verte sur les 3 OS pour chaque commit
 - [ ] Confirmer la licence GPL-3.0 (compat mappings Mixxx) et ajouter `LICENSE`
-- [ ] Pousser sur un remote et vérifier que la CI passe sur les 3 OS
 
 ## M1 — Moteur audio
 

@@ -2,7 +2,7 @@
 //! lock-free (`rtrb`, specs §2.3).
 //!
 //! Les variantes portent des valeurs prêtes à l'emploi — par exemple des
-//! coefficients de biquad déjà calculés (M2), jamais des fréquences à
+//! coefficients de biquad déjà calculés, jamais des fréquences à
 //! convertir : aucun travail différable n'entre dans le callback.
 
 use std::sync::Arc;

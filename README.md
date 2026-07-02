@@ -9,6 +9,11 @@ rendues par shaders (Bevy/wgpu).
 - **Roadmap et avancement** : [ROADMAP.md](ROADMAP.md)
 - **Checklist de test matériel** : [TESTING.md](TESTING.md)
 
+**État** : POC v0.1 code-complet (M0→M6, CI verte Linux/macOS/Windows) —
+restent les validations matérielles avec le contrôleur ([TESTING.md](TESTING.md))
+et la confirmation de licence. Reprise du travail : section « Reprendre le
+travail » de la [ROADMAP](ROADMAP.md).
+
 ## Démarrage
 
 L'environnement de développement est géré par un flake nix :
@@ -16,12 +21,13 @@ L'environnement de développement est géré par un flake nix :
 ```sh
 nix develop            # ou `direnv allow` si vous utilisez direnv
 cargo test --workspace
-cargo run -p app -- piste_a.mp3 piste_b.flac   # mix 2 decks au clavier (M1)
+cargo run -p app                               # binaire `ober`
+cargo run -p app -- piste_a.mp3 piste_b.flac   # pistes préchargées (optionnel)
 ```
 
-Contrôles clavier du M1 (positions physiques, étiquettes QWERTY) — le
-contrôleur MIDI arrive au M3, l'UI complète au M6 (l'état vit dans le titre
-de la fenêtre en attendant) :
+Une session complète se pilote au contrôleur (transport, mixage, EQ, pitch,
+jogs, bibliothèque, LEDs). Fallback clavier (positions physiques, étiquettes
+QWERTY) :
 
 | Touche              | Action                       |
 |---------------------|------------------------------|

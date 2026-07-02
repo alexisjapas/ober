@@ -2,7 +2,12 @@
 
 Pas de test matériel en CI (specs §7) : cette checklist se déroule à la main
 avec le **Hercules DJControl Inpulse 200 MK2** branché, avant chaque merge
-touchant `engine`, `midi` ou `mapping`. Elle sera étoffée à chaque jalon.
+touchant `engine`, `midi` ou `mapping`.
+
+État : tout le code M0→M6 est implémenté et vert en CI — ces checklists
+sont la **validation matérielle restante** du POC. Déjà vérifié sur le
+MK2 : détection de la carte et ouverture du stream 4 canaux @ 48 kHz
+(buffer imposé 1114 frames ≈ 23 ms, cf. docs/latence.md).
 
 ## Pré-requis
 
@@ -15,7 +20,9 @@ touchant `engine`, `midi` ou `mapping`. Elle sera étoffée à chaque jalon.
 
 - [ ] Chargement de 2 pistes (MP3, FLAC, WAV), play/pause/seek au clavier
 - [ ] Crossfader et volumes au clavier, aucun underrun signalé
-- [ ] Latence mesurée ≤ 10 ms (documenter la méthode)
+- [ ] Latence mesurée ≤ 10 ms — méthode dans docs/latence.md ; attention :
+      le MK2 impose ≈ 23 ms de buffer en 4 canaux ALSA brut (pistes
+      d'amélioration documentées au même endroit)
 
 ## M2 — DSP
 

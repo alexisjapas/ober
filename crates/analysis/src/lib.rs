@@ -1,7 +1,7 @@
 //! Analyse audio (specs §4.2) — aucune dépendance Bevy.
 //!
 //! Deux volets :
-//! - **offline** (jalon M5) : BPM + beatgrid (onsets par flux d'énergie
+//! - **offline** : BPM + beatgrid (onsets par flux d'énergie
 //!   spectrale, autocorrélation 60–200 BPM, résolution 0,01) et waveform
 //!   summary 3 bandes ;
 //! - **temps réel** : bus d'analyseurs alimenté par le tap audio (§2.3),

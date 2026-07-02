@@ -1,12 +1,15 @@
 //! Binaire Bevy : UI, orchestration, plugins (specs §6). Seule crate du
 //! workspace autorisée à dépendre de Bevy (frontière §1.4, vérifiée en CI).
 //!
-//! M1/M2 : mix 2 pistes au clavier, EQ/varispeed/limiteur, pré-écoute casque
-//! si la carte du contrôleur est détectée — pas encore de rendu (waveforms et
-//! design system : M6). Usage :
+//! Écran unique du POC (§6.3) : 2 waveforms shader (3 bandes, beatgrid,
+//! zoom), bande de contrôles (boutons/sliders souris), VU master,
+//! bibliothèque intégrée pilotable au contrôleur, panneau egui F12,
+//! mode idle basse consommation. Trois entrées — contrôleur MIDI, clavier,
+//! souris — émettent les mêmes `mapping::Action` (§6.4). Usage :
 //!
 //! ```sh
-//! cargo run -p app -- piste_a.mp3 piste_b.flac
+//! cargo run -p app                               # binaire `ober`
+//! cargo run -p app -- piste_a.mp3 piste_b.flac   # pistes préchargées
 //! ```
 //!
 //! Configuration optionnelle dans `ober.config.ron` (répertoire courant) :
@@ -307,7 +310,7 @@ fn setup(mut commands: Commands) {
             .map_or("?".to_owned(), |ms| format!("{ms:.1} ms")),
     );
 
-    // Chargement des pistes passées en CLI (file picker natif : M6).
+    // Pistes optionnelles passées en CLI (sinon : bibliothèque intégrée).
     let (tx, rx) = channel();
     let paths: Vec<PathBuf> = std::env::args()
         .skip(1)
