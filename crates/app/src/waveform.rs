@@ -326,6 +326,7 @@ fn update_playheads(
     snapshot: Res<LastSnapshot>,
     stream: Res<StreamInfoRes>,
     zoom: Res<WaveZoom>,
+    mix: Res<crate::MixState>,
     mut waveforms: ResMut<WaveformEntities>,
     mut materials: ResMut<Assets<WaveformMaterial>>,
 ) {
@@ -349,7 +350,14 @@ fn update_playheads(
             wf.display_pos += (target - wf.display_pos) * alpha;
         }
 
-        let window = (zoom.seconds * sample_rate / wf.track_frames).min(1.0);
+        // The window represents constant wall-clock time: at higher pitch
+        // more track content plays per second, so more of it fits the
+        // window (the waveform compresses) — two decks at matched tempo
+        // then show the same on-screen beat spacing. Derived from the
+        // pitch setting, not the instantaneous speed: scratching must not
+        // zoom the display.
+        let pitch_factor = 1.0 + f64::from(mix.pitch[i]);
+        let window = (zoom.seconds * sample_rate * pitch_factor / wf.track_frames).min(1.0);
 
         // Niveau de mipmap : ~points de niveau 0 par pixel affiché.
         let visible_points = window * wf.mip_points[0] as f64;
