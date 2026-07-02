@@ -56,9 +56,10 @@ All project knowledge lives in the repo: verbatim specs in
    of the stream that won → 4 ch @ 44.1 kHz, 256 frames = 5.8 ms on the
    MK2 (details and probe: docs/latency.md, `audio-probe`). Remaining:
    the physical loopback measurement (TESTING.md M1).
-3. **First release**: drop the `-dev` suffix, annotated tag `v0.1.0`
-   (message = changelog) — the release CI builds and publishes the three
-   platforms (Rule 11).
+3. ~~**First release**~~ **done 2026-07-02**: `v0.1.0` tagged and
+   published (annotated tag = changelog; three-platform archives from the
+   release CI). The next `feat:` that changes the shipped binary rolls
+   `Cargo.toml` onto `0.2.0` (Rule 11).
 4. **v0.2**: see "After the POC" at the end of this document.
 
 ---
