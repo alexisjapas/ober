@@ -64,6 +64,9 @@ pub struct EngineConfig {
     /// preference order (debugging aid; the automatic strategy already
     /// prefers whichever rate honors the requested buffer).
     pub sample_rate: Option<u32>,
+    /// Skips name matching entirely and opens the system default device in
+    /// stereo (the "PC output" choice of the options panel).
+    pub use_default_device: bool,
 }
 
 impl Default for EngineConfig {
@@ -72,6 +75,7 @@ impl Default for EngineConfig {
             device_match: None,
             buffer_frames: TARGET_BUFFER_FRAMES,
             sample_rate: None,
+            use_default_device: false,
         }
     }
 }
@@ -84,6 +88,10 @@ pub struct StreamInfo {
     pub channels: u16,
     /// Taille de buffer effective en frames, si le backend sait la donner.
     pub buffer_frames: Option<u32>,
+    /// True when the retained stream runs on a name-matched device (the
+    /// controller), false on the system-default fallback — the hot-plug
+    /// logic uses this to know a restart could do better.
+    pub matched_by_name: bool,
 }
 
 impl StreamInfo {
@@ -203,6 +211,11 @@ fn pick_devices(
     host: &cpal::Host,
     config: &EngineConfig,
 ) -> Result<(Vec<(Device, String)>, bool), EngineError> {
+    if config.use_default_device {
+        let device = host.default_output_device().ok_or(EngineError::NoDevice)?;
+        let name = device_name(&device);
+        return Ok((vec![(device, name)], false));
+    }
     let wanted = config.device_match.as_deref();
     let mut matches: Vec<(Device, String)> = Vec::new();
     if let Ok(devices) = host.output_devices() {
@@ -348,10 +361,10 @@ fn build_stream(
     // Attempt plan (specs §3.2): 4 channels reserved for the name-matched
     // devices; final fallback on the system default device.
     let channel_candidates: &[u16] = if matched_by_name { &[4, 2] } else { &[2] };
-    let mut plans: Vec<(Device, String, Attempt)> = Vec::new();
+    let mut plans: Vec<(Device, String, bool, Attempt)> = Vec::new();
     for (idx, attempt) in attempt_plan(&devices, channel_candidates, rates, config.buffer_frames) {
         let (device, name) = &devices[idx];
-        plans.push((device.clone(), name.clone(), attempt));
+        plans.push((device.clone(), name.clone(), matched_by_name, attempt));
     }
     if matched_by_name && let Some(fallback) = host.default_output_device() {
         let fallback_name = device_name(&fallback);
@@ -359,7 +372,7 @@ fn build_stream(
             let fallback = vec![(fallback, fallback_name)];
             for (idx, attempt) in attempt_plan(&fallback, &[2], rates, config.buffer_frames) {
                 let (device, name) = &fallback[idx];
-                plans.push((device.clone(), name.clone(), attempt));
+                plans.push((device.clone(), name.clone(), false, attempt));
             }
         }
     }
@@ -370,6 +383,7 @@ fn build_stream(
         plans.push((
             device.clone(),
             name.clone(),
+            matched_by_name,
             Attempt {
                 channels: 2,
                 rate: rates[0],
@@ -383,7 +397,7 @@ fn build_stream(
     let shared = Arc::new(Mutex::new(Some(graph)));
 
     let mut last_error = String::from("aucune configuration candidate");
-    for (device, name, attempt) in plans {
+    for (device, name, matched, attempt) in plans {
         let stream_config = StreamConfig {
             channels: attempt.channels,
             sample_rate: attempt.rate,
@@ -441,6 +455,7 @@ fn build_stream(
                     sample_rate: attempt.rate,
                     channels,
                     buffer_frames: stream.buffer_size().ok().or(requested),
+                    matched_by_name: matched,
                 };
                 return Ok((stream, info));
             }

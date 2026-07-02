@@ -103,7 +103,14 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (poll_decoded, midi_sync, keyboard_controls, drain_engine).chain(),
+            (
+                poll_decoded,
+                midi_sync,
+                apply_restart,
+                keyboard_controls,
+                drain_engine,
+            )
+                .chain(),
         )
         .run();
 }
@@ -120,6 +127,52 @@ struct AppConfig {
     /// 44.1 kHz when it lets the device honor the requested buffer
     /// (docs/latency.md).
     sample_rate: Option<u32>,
+    /// Master output: the controller card (default) or the system default
+    /// device — switchable at runtime from the options panel.
+    output: OutputChoice,
+}
+
+/// Where the master goes (specs §3.2). `Controller` keeps the name-matched
+/// 4-channel behavior; `System` forces the default device in stereo.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum OutputChoice {
+    #[default]
+    Controller,
+    System,
+}
+
+/// Audio configuration driving engine (re)starts: the file-config base plus
+/// the runtime output choice (options panel, hot-plug).
+#[derive(Resource, Clone)]
+struct AudioSettings {
+    device_match: Option<String>,
+    buffer_frames: u32,
+    sample_rate: Option<u32>,
+    output: OutputChoice,
+}
+
+impl AudioSettings {
+    fn engine_config(&self) -> EngineConfig {
+        EngineConfig {
+            device_match: self.device_match.clone(),
+            buffer_frames: self.buffer_frames,
+            sample_rate: self.sample_rate,
+            use_default_device: self.output == OutputChoice::System,
+        }
+    }
+}
+
+/// Engine-restart request (hot-plug §5.1, options panel), consumed by
+/// [`apply_restart`]. The retry fields cover the ALSA card registering
+/// shortly after the MIDI port on replug.
+#[derive(Resource, Default)]
+struct RestartAudio {
+    requested: bool,
+    /// Armed when the controller unplugs while the stream ran on it: the
+    /// next MIDI reconnection rebuilds the audio stack.
+    rearm_on_connect: bool,
+    retries_left: u8,
+    retry_at: f64,
 }
 
 impl AppConfig {
@@ -159,6 +212,8 @@ enum WorkerMsg {
     Loaded {
         deck: Deck,
         name: String,
+        /// Source file — kept to re-decode at a new rate on engine restart.
+        path: PathBuf,
         truncated: bool,
         buffer: Arc<TrackBuffer>,
         summary: analysis::WaveformSummary,
@@ -179,6 +234,8 @@ struct DecodeInbox(Mutex<Receiver<WorkerMsg>>);
 
 struct LoadedTrack {
     name: String,
+    /// Source file — needed to re-decode when the stream rate changes.
+    path: PathBuf,
     /// Clone de l'Arc envoyé au moteur : garantit qu'un drop côté callback
     /// ne désalloue jamais (cf. engine::track) ; sert aussi au rendu.
     buffer: Arc<TrackBuffer>,
@@ -188,14 +245,23 @@ struct LoadedTrack {
     analysis: Option<analysis::TrackAnalysis>,
 }
 
+/// Playback state to restore once a deck's track reloads after an engine
+/// restart — the position is a track fraction, valid whatever the rate.
+#[derive(Clone, Copy)]
+struct RestoreState {
+    fraction: f64,
+    playing: bool,
+}
+
 #[derive(Resource, Default)]
 struct Decks {
     tracks: [Option<LoadedTrack>; 2],
+    restore: [Option<RestoreState>; 2],
 }
 
 /// Valeurs pilotées par l'UI (le moteur reste la source de vérité pour la
 /// position/lecture, publiée par snapshots).
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 struct MixState {
     volumes: [f32; 2],
     /// Fraction de pitch (−0,08 → +0,08) ; le moteur reçoit 1.0 + pitch.
@@ -291,11 +357,13 @@ fn load_mapping() -> Option<mapping::Mapping> {
 
 fn setup(mut commands: Commands) {
     let config = AppConfig::load();
-    let engine_config = EngineConfig {
+    let settings = AudioSettings {
         device_match: config.device_match,
         buffer_frames: config.buffer_frames.unwrap_or(engine::TARGET_BUFFER_FRAMES),
         sample_rate: config.sample_rate,
+        output: config.output,
     };
+    let engine_config = settings.engine_config();
     // Pas de panic dans un système Bevy (démontage sale) : erreur claire
     // puis sortie propre.
     let mut engine = match Engine::start(engine_config) {
@@ -381,6 +449,8 @@ fn setup(mut commands: Commands) {
         sample_rate: engine.info.sample_rate,
     });
     commands.insert_resource(StreamInfoRes(engine.info.clone()));
+    commands.insert_resource(settings);
+    commands.insert_resource(RestartAudio::default());
     commands.insert_resource(AudioEngine(Mutex::new(engine)));
     commands.insert_resource(DecodeInbox(Mutex::new(rx)));
     commands.insert_resource(Decks::default());
@@ -408,6 +478,7 @@ fn poll_decoded(
             WorkerMsg::Loaded {
                 deck,
                 name,
+                path,
                 truncated,
                 buffer,
                 summary,
@@ -421,8 +492,10 @@ fn poll_decoded(
                     name,
                     buffer.frames() as f64 / sample_rate
                 );
+                let frames = buffer.frames() as f64;
                 decks.tracks[deck.index()] = Some(LoadedTrack {
                     name,
+                    path,
                     buffer: Arc::clone(&buffer),
                     summary,
                     analysis: None,
@@ -435,6 +508,18 @@ fn poll_decoded(
                     .is_err()
                 {
                     warn!("file de commandes audio pleine, chargement ignoré");
+                }
+                // Engine restart in flight: put the needle back where it
+                // was (track fraction — rate-independent) and resume.
+                if let Some(restore) = decks.restore[deck.index()].take() {
+                    let target = (restore.fraction * frames) as u64;
+                    let _ = eng
+                        .ports
+                        .commands
+                        .push(EngineCommand::SeekSamples(deck, target));
+                    if restore.playing {
+                        let _ = eng.ports.commands.push(EngineCommand::Play(deck));
+                    }
                 }
             }
             WorkerMsg::LoadFailed { deck, name, error } => {
@@ -482,6 +567,7 @@ fn spawn_load_worker(path: PathBuf, deck: Deck, tx: Sender<WorkerMsg>, sample_ra
                     let _ = tx.send(WorkerMsg::Loaded {
                         deck,
                         name,
+                        path,
                         truncated,
                         buffer: Arc::clone(&buffer),
                         summary,
@@ -514,6 +600,153 @@ fn emit_control(
     mirror_event(&event, mix);
 }
 
+/// Re-emits the whole mix state into a freshly started engine — the same
+/// single intent path as MIDI/keyboard/mouse (specs §6.4), so an engine
+/// restart (output switch, hot-plug) preserves volumes, EQ, pitch,
+/// crossfader, cue and gains.
+fn resync_mix(eng: &mut Engine, mix: &MixState) {
+    use mapping::{Action as A, Deck as MDeck};
+    use midi::ControlValue as V;
+    let mut send = |action: A, value: V| {
+        let event = ControlEvent { action, value };
+        if let Some(command) = midi::to_engine_command(&event, eng.info.sample_rate) {
+            let _ = eng.ports.commands.push(command);
+        }
+    };
+    for (i, deck) in [MDeck::A, MDeck::B].into_iter().enumerate() {
+        send(A::Volume { deck }, V::Absolute(mix.volumes[i]));
+        // Même convention 0..1 que le fader (0,5 = pitch nominal).
+        send(
+            A::Pitch { deck },
+            V::Absolute(mix.pitch[i] / PITCH_RANGE * 0.5 + 0.5),
+        );
+        send(A::EqLow { deck }, V::Absolute(mix.eq_db[i][0]));
+        send(A::EqMid { deck }, V::Absolute(mix.eq_db[i][1]));
+        send(A::EqHigh { deck }, V::Absolute(mix.eq_db[i][2]));
+        send(A::HeadphoneCue { deck }, V::Toggled(mix.cue[i]));
+    }
+    send(A::CrossFader, V::Absolute(mix.crossfader * 0.5 + 0.5));
+    send(A::MasterGain, V::Absolute(mix.master));
+    send(A::CueMix, V::Absolute(mix.cue_mix));
+    send(A::HeadphoneGain, V::Absolute(mix.headphone));
+}
+
+/// Tears down and rebuilds the whole audio + MIDI stack at runtime (output
+/// switch from the options panel, controller hot-plug — specs §3.2/§5.1),
+/// then rehydrates the session: mix state re-emitted through the single
+/// intent path, tracks re-decoded at the new stream rate from their source
+/// paths, positions and playback restored proportionally. Exclusive system:
+/// resource replacement drops the previous engine and MIDI thread cleanly.
+fn apply_restart(world: &mut World) {
+    let now = world.resource::<Time>().elapsed_secs_f64();
+    {
+        let mut restart = world.resource_mut::<RestartAudio>();
+        let retry_due = restart.retries_left > 0 && now >= restart.retry_at;
+        if !restart.requested && !retry_due {
+            return;
+        }
+        if !restart.requested {
+            restart.retries_left -= 1;
+        }
+        restart.requested = false;
+        restart.retry_at = f64::INFINITY;
+    }
+
+    let settings = world.resource::<AudioSettings>().clone();
+    let mut engine = match Engine::start(settings.engine_config()) {
+        Ok(engine) => engine,
+        Err(e) => {
+            // The previous engine stays installed; a pending retry (or the
+            // next reconnection) will try again.
+            error!("redémarrage audio impossible : {e}");
+            return;
+        }
+    };
+    info!(
+        "audio redémarré : « {} » @ {} Hz, {} canaux, buffer {}",
+        engine.info.device_name,
+        engine.info.sample_rate,
+        engine.info.channels,
+        engine
+            .info
+            .buffer_frames
+            .map_or("par défaut".to_owned(), |f| format!("{f} frames")),
+    );
+    {
+        // Wanted the controller but landed on the fallback (ALSA can
+        // register the card after the MIDI port): retry shortly.
+        let mut restart = world.resource_mut::<RestartAudio>();
+        if settings.output == OutputChoice::Controller && !engine.info.matched_by_name {
+            if restart.retries_left > 0 {
+                restart.retry_at = now + 1.5;
+            }
+        } else {
+            restart.retries_left = 0;
+        }
+    }
+
+    // MIDI stack: fresh channels + thread on the new engine's ring.
+    let (midi_events_tx, midi_events_rx) = crossbeam_channel::unbounded();
+    let (midi_status_tx, midi_status_rx) = crossbeam_channel::unbounded();
+    let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
+    let midi_io = load_mapping().and_then(|mapping| {
+        let producer = engine.ports.midi_commands.take()?;
+        MidiIo::spawn(
+            mapping,
+            producer,
+            midi_events_tx,
+            midi_status_tx,
+            snapshot_rx,
+            engine.info.sample_rate,
+        )
+        .inspect_err(|e| error!("thread MIDI : {e}"))
+        .ok()
+    });
+
+    resync_mix(&mut engine, &world.resource::<MixState>().clone());
+
+    // Positions to restore, captured from the last published snapshot
+    // (still the old engine's state at this point in the frame).
+    let snapshot = world.resource::<LastSnapshot>().0;
+    let sample_rate = engine.info.sample_rate;
+    world.resource_mut::<LoadSender>().sample_rate = sample_rate;
+    world.insert_resource(StreamInfoRes(engine.info.clone()));
+    // Replacing the resources drops the old engine (stream closed, audio
+    // thread joined) and the old MidiIo (thread joined).
+    world.insert_resource(AudioEngine(Mutex::new(engine)));
+    world.insert_resource(MidiRes {
+        _io: midi_io,
+        events: midi_events_rx,
+        status: midi_status_rx,
+        snapshot_tx,
+        controller: None,
+    });
+
+    // Re-decode the loaded tracks at the new rate, marking each deck for
+    // position/playback restoration on arrival.
+    let tx = world.resource::<LoadSender>().tx.clone();
+    let mut decks = world.resource_mut::<Decks>();
+    let Decks { tracks, restore } = &mut *decks;
+    let mut reloads: Vec<(Deck, PathBuf)> = Vec::new();
+    for (i, slot) in tracks.iter().enumerate() {
+        let Some(track) = slot else { continue };
+        let snap = &snapshot.decks[i];
+        let fraction = if snap.track_frames > 0 {
+            snap.position_samples as f64 / snap.track_frames as f64
+        } else {
+            0.0
+        };
+        restore[i] = Some(RestoreState {
+            fraction,
+            playing: snap.playing,
+        });
+        reloads.push((Deck::ALL[i], track.path.clone()));
+    }
+    for (deck, path) in reloads {
+        spawn_load_worker(path, deck, tx.clone(), sample_rate);
+    }
+}
+
 /// Reflète un événement de contrôle dans l'état d'affichage — mêmes règles
 /// pour le clavier, la souris et le MIDI (specs §6.4).
 fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
@@ -543,11 +776,15 @@ fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
 /// Copie UI du flux MIDI (specs §5.1) : le chemin court a déjà envoyé les
 /// commandes au moteur depuis le thread MIDI ; ici on ne fait que refléter
 /// les valeurs dans l'état d'affichage et traiter les actions purement UI.
+#[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par ressource
 fn midi_sync(
     mut midi: ResMut<MidiRes>,
     mut mix: ResMut<MixState>,
     mut browser: ResMut<browser::Browser>,
     mut activity: ResMut<power::ControlActivity>,
+    mut restart: ResMut<RestartAudio>,
+    stream: Res<StreamInfoRes>,
+    settings: Res<AudioSettings>,
     load_tx: Res<LoadSender>,
 ) {
     while let Ok(status) = midi.status.try_recv() {
@@ -555,10 +792,24 @@ fn midi_sync(
             MidiStatus::Connected(name) => {
                 info!("contrôleur MIDI connecté : {name}");
                 midi.controller = Some(name);
+                // Audio follows the controller (specs §3.2): rebuild the
+                // stream when it reappears after an unplug (the old stream
+                // is dead even though its name still matches), or when the
+                // controller output is wanted but the engine sits on the
+                // fallback device (app started before the controller).
+                let want_controller = settings.output == OutputChoice::Controller;
+                if want_controller && (restart.rearm_on_connect || !stream.0.matched_by_name) {
+                    restart.rearm_on_connect = false;
+                    restart.requested = true;
+                    restart.retries_left = 3;
+                }
             }
             MidiStatus::Disconnected => {
                 warn!("contrôleur MIDI débranché — reconnexion automatique en attente");
                 midi.controller = None;
+                if stream.0.matched_by_name {
+                    restart.rearm_on_connect = true;
+                }
             }
         }
     }
