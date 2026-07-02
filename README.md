@@ -37,6 +37,7 @@ de la fenêtre en attendant) :
 | `R` / `P`           | reset pitch A / B            |
 | `N` `M`             | mix casque cue ↔ master      |
 | `J` `K`             | gain casque − / +            |
+| molette             | zoom des waveforms           |
 
 Audio : détection automatique d'un périphérique « DJControl » (stream
 4 canaux master + casque s'il le supporte), sinon périphérique par défaut en

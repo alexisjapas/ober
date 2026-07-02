@@ -37,6 +37,12 @@ pub fn to_engine_command(event: &ControlEvent) -> Option<EngineCommand> {
         (Action::Cue { deck }, V::Pressed(true)) => EngineCommand::CuePress(engine_deck(deck)),
         (Action::Cue { deck }, V::Pressed(false)) => EngineCommand::CueRelease(engine_deck(deck)),
 
+        // Seek relatif en secondes signées (clavier/UI, encodeurs M3+).
+        (Action::Seek { deck }, V::Relative(seconds)) => EngineCommand::SeekRelative(
+            engine_deck(deck),
+            i64::from(seconds) * i64::from(SAMPLE_RATE),
+        ),
+
         // Mixage.
         (Action::Volume { deck }, V::Absolute(v)) => {
             EngineCommand::SetDeckVolume(engine_deck(deck), v)

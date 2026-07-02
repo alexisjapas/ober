@@ -29,6 +29,10 @@ pub enum Action {
     Cue {
         deck: Deck,
     },
+    /// Déplacement dans la piste — `Relative` : secondes signées.
+    Seek {
+        deck: Deck,
+    },
     Volume {
         deck: Deck,
     },

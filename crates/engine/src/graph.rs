@@ -350,6 +350,11 @@ impl AudioGraph {
                     let max = deck.track.as_ref().map_or(0, |t| t.frames() as u64);
                     deck.position = pos.min(max) as f64;
                 }
+                EngineCommand::SeekRelative(d, delta) => {
+                    let deck = self.deck_mut(d);
+                    let max = deck.track.as_ref().map_or(0.0, |t| t.frames() as f64);
+                    deck.position = (deck.position + delta as f64).clamp(0.0, max);
+                }
                 EngineCommand::SetDeckVolume(d, v) => {
                     self.deck_mut(d).volume = v.clamp(0.0, 1.0);
                 }

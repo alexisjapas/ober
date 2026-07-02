@@ -29,11 +29,16 @@
 //! | `R` / `P`               | remise à zéro du pitch A / B        |
 //! | `N` `M`                 | mix casque cue ↔ master             |
 //! | `J` `K`                 | gain casque − / +                   |
+//! | molette                 | zoom des waveforms                  |
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
+mod hud;
+mod power;
+mod theme;
+mod vu;
 mod waveform;
 
 use bevy::prelude::*;
@@ -69,18 +74,17 @@ fn main() {
             }),
             ..Default::default()
         }))
-        .add_plugins(waveform::WaveformPlugin)
+        .insert_resource(ClearColor(theme::color::BACKGROUND))
+        .add_plugins((
+            waveform::WaveformPlugin,
+            vu::VuPlugin,
+            hud::HudPlugin,
+            power::PowerPlugin,
+        ))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (
-                poll_decoded,
-                midi_sync,
-                keyboard_controls,
-                drain_engine,
-                update_status,
-            )
-                .chain(),
+            (poll_decoded, midi_sync, keyboard_controls, drain_engine).chain(),
         )
         .run();
 }
@@ -127,7 +131,7 @@ enum WorkerMsg {
         name: String,
         truncated: bool,
         buffer: Arc<TrackBuffer>,
-        overview: Vec<analysis::WaveformPoint>,
+        summary: analysis::WaveformSummary,
     },
     LoadFailed {
         deck: Deck,
@@ -148,7 +152,8 @@ struct LoadedTrack {
     /// Clone de l'Arc envoyé au moteur : garantit qu'un drop côté callback
     /// ne désalloue jamais (cf. engine::track) ; sert aussi au rendu.
     buffer: Arc<TrackBuffer>,
-    overview: Vec<analysis::WaveformPoint>,
+    /// Summary 3 bandes pour le rendu waveform (specs §4.2/§6.1).
+    summary: analysis::WaveformSummary,
     /// BPM/beatgrid, livrés après coup par le worker (asynchrone).
     analysis: Option<analysis::TrackAnalysis>,
 }
@@ -293,7 +298,7 @@ fn setup(mut commands: Commands) {
                 match decode::decode_file(&path) {
                     Ok(track) => {
                         let truncated = track.truncated;
-                        let overview = analysis::compute_overview(
+                        let summary = analysis::compute_summary(
                             &track.samples,
                             decode::TARGET_SAMPLE_RATE,
                             OVERVIEW_POINTS_PER_SECOND,
@@ -305,7 +310,7 @@ fn setup(mut commands: Commands) {
                             name,
                             truncated,
                             buffer: Arc::clone(&buffer),
-                            overview,
+                            summary,
                         });
                         // …le BPM/beatgrid arrive quand il est prêt (§4.2).
                         let analysis =
@@ -378,7 +383,7 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
                 name,
                 truncated,
                 buffer,
-                overview,
+                summary,
             } => {
                 if truncated {
                     warn!("« {name} » : fichier tronqué, partie décodée conservée");
@@ -392,7 +397,7 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
                 decks.tracks[deck.index()] = Some(LoadedTrack {
                     name,
                     buffer: Arc::clone(&buffer),
-                    overview,
+                    summary,
                     analysis: None,
                 });
                 let mut eng = engine.0.lock().unwrap();
@@ -426,6 +431,29 @@ fn poll_decoded(inbox: Res<DecodeInbox>, engine: Res<AudioEngine>, mut decks: Re
     }
 }
 
+/// Reflète un événement de contrôle dans l'état d'affichage — mêmes règles
+/// pour le clavier, la souris (M6b) et le MIDI (specs §6.4).
+fn mirror_event(event: &ControlEvent, mix: &mut MixState) {
+    use mapping::{Action as A, Deck as MDeck};
+    use midi::ControlValue as V;
+    let idx = |d: MDeck| match d {
+        MDeck::A => 0usize,
+        MDeck::B => 1,
+    };
+    match (event.action, event.value) {
+        (A::Volume { deck }, V::Absolute(v)) => mix.volumes[idx(deck)] = v,
+        (A::CrossFader, V::Absolute(v)) => mix.crossfader = v * 2.0 - 1.0,
+        (A::Pitch { deck }, V::Absolute(v)) => {
+            mix.pitch[idx(deck)] = (v * 2.0 - 1.0) * PITCH_RANGE;
+        }
+        (A::HeadphoneCue { deck }, V::Toggled(on) | V::Pressed(on)) => mix.cue[idx(deck)] = on,
+        (A::MasterGain, V::Absolute(v)) => mix.master = v,
+        (A::CueMix, V::Absolute(v)) => mix.cue_mix = v,
+        (A::HeadphoneGain, V::Absolute(v)) => mix.headphone = v,
+        _ => {}
+    }
+}
+
 /// Copie UI du flux MIDI (specs §5.1) : le chemin court a déjà envoyé les
 /// commandes au moteur depuis le thread MIDI ; ici on ne fait que refléter
 /// les valeurs dans l'état d'affichage et traiter les actions purement UI.
@@ -444,31 +472,18 @@ fn midi_sync(mut midi: ResMut<MidiRes>, mut mix: ResMut<MixState>) {
     }
 
     while let Ok(event) = midi.events.try_recv() {
-        use mapping::Action as A;
-        let idx = |d: mapping::Deck| match d {
-            mapping::Deck::A => 0usize,
-            mapping::Deck::B => 1,
-        };
-        match (event.action, event.value) {
-            (A::Volume { deck }, ControlValue::Absolute(v)) => mix.volumes[idx(deck)] = v,
-            (A::CrossFader, ControlValue::Absolute(v)) => mix.crossfader = v * 2.0 - 1.0,
-            (A::Pitch { deck }, ControlValue::Absolute(v)) => {
-                mix.pitch[idx(deck)] = (v * 2.0 - 1.0) * PITCH_RANGE;
-            }
-            (A::HeadphoneCue { deck }, ControlValue::Toggled(on)) => mix.cue[idx(deck)] = on,
-            (A::MasterGain, ControlValue::Absolute(v)) => mix.master = v,
-            (A::CueMix, ControlValue::Absolute(v)) => mix.cue_mix = v,
-            (A::HeadphoneGain, ControlValue::Absolute(v)) => mix.headphone = v,
-            (A::Load { deck }, ControlValue::Pressed(true)) => {
-                info!("Load deck {deck:?} : le file picker arrive au M6");
-            }
-            _ => {}
+        if let (mapping::Action::Load { deck }, ControlValue::Pressed(true)) =
+            (event.action, event.value)
+        {
+            info!("Load deck {deck:?} : le file picker arrive au M6b");
         }
+        mirror_event(&event, &mut mix);
     }
 }
 
-/// Fallback clavier (specs §2.1) : émet les mêmes commandes moteur que le
-/// chemin MIDI (specs §6.4).
+/// Fallback clavier (specs §2.1) : émet les mêmes `mapping::Action` que le
+/// MIDI — un seul chemin de traitement des intentions (specs §6.4), routé
+/// vers le moteur par `midi::to_engine_command`.
 fn keyboard_controls(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -476,51 +491,51 @@ fn keyboard_controls(
     mut mix: ResMut<MixState>,
     snapshot: Res<LastSnapshot>,
 ) {
+    use mapping::{Action, Deck as MDeck};
+    use midi::ControlValue as V;
+
     let mut eng = engine.0.lock().unwrap();
+    let mix = &mut *mix;
+    let mut emit = |action: Action, value: V, mix: &mut MixState| {
+        let event = ControlEvent { action, value };
+        if let Some(command) = midi::to_engine_command(&event) {
+            let _ = eng.ports.commands.push(command);
+        }
+        mirror_event(&event, mix);
+    };
+
+    const DECKS: [MDeck; 2] = [MDeck::A, MDeck::B];
 
     // Play/pause selon l'état réellement publié par le moteur.
-    for (deck, key) in [(Deck::A, KeyCode::Space), (Deck::B, KeyCode::Enter)] {
+    for (i, key) in [(0usize, KeyCode::Space), (1, KeyCode::Enter)] {
         if keys.just_pressed(key) {
-            let playing = snapshot.0.decks[deck.index()].playing;
-            let command = if playing {
-                EngineCommand::Pause(deck)
-            } else {
-                EngineCommand::Play(deck)
-            };
-            let _ = eng.ports.commands.push(command);
+            let playing = snapshot.0.decks[i].playing;
+            emit(Action::Play { deck: DECKS[i] }, V::Toggled(!playing), mix);
         }
     }
 
     // Cue casque (toggle).
-    for (deck, key) in [(Deck::A, KeyCode::Digit1), (Deck::B, KeyCode::Digit2)] {
+    for (i, key) in [(0usize, KeyCode::Digit1), (1, KeyCode::Digit2)] {
         if keys.just_pressed(key) {
-            let cue = &mut mix.cue[deck.index()];
-            *cue = !*cue;
-            let _ = eng
-                .ports
-                .commands
-                .push(EngineCommand::SetCueEnabled(deck, *cue));
+            emit(
+                Action::HeadphoneCue { deck: DECKS[i] },
+                V::Toggled(!mix.cue[i]),
+                mix,
+            );
         }
     }
 
-    // Seek ±5 s depuis la position publiée.
-    let seek_step = SEEK_STEP_SECONDS * u64::from(SAMPLE_RATE);
-    for (deck, back, forward) in [
-        (Deck::A, KeyCode::KeyA, KeyCode::KeyD),
-        (Deck::B, KeyCode::ArrowLeft, KeyCode::ArrowRight),
+    // Seek ±5 s (le moteur clampe aux bornes de la piste).
+    for (i, back, forward) in [
+        (0usize, KeyCode::KeyA, KeyCode::KeyD),
+        (1, KeyCode::ArrowLeft, KeyCode::ArrowRight),
     ] {
-        let position = snapshot.0.decks[deck.index()].position_samples;
+        let step = SEEK_STEP_SECONDS as i32;
         if keys.just_pressed(back) {
-            let _ = eng.ports.commands.push(EngineCommand::SeekSamples(
-                deck,
-                position.saturating_sub(seek_step),
-            ));
+            emit(Action::Seek { deck: DECKS[i] }, V::Relative(-step), mix);
         }
         if keys.just_pressed(forward) {
-            let _ = eng
-                .ports
-                .commands
-                .push(EngineCommand::SeekSamples(deck, position + seek_step));
+            emit(Action::Seek { deck: DECKS[i] }, V::Relative(step), mix);
         }
     }
 
@@ -530,76 +545,60 @@ fn keyboard_controls(
         f32::from(keys.pressed(plus)) - f32::from(keys.pressed(minus))
     };
 
-    for (deck, plus, minus) in [
-        (Deck::A, KeyCode::KeyW, KeyCode::KeyS),
-        (Deck::B, KeyCode::ArrowUp, KeyCode::ArrowDown),
+    for (i, plus, minus) in [
+        (0usize, KeyCode::KeyW, KeyCode::KeyS),
+        (1, KeyCode::ArrowUp, KeyCode::ArrowDown),
     ] {
         let delta = axis(plus, minus) * VOLUME_PER_SECOND * dt;
         if delta != 0.0 {
-            let volume = &mut mix.volumes[deck.index()];
-            *volume = (*volume + delta).clamp(0.0, 1.0);
-            let _ = eng
-                .ports
-                .commands
-                .push(EngineCommand::SetDeckVolume(deck, *volume));
+            let volume = (mix.volumes[i] + delta).clamp(0.0, 1.0);
+            emit(Action::Volume { deck: DECKS[i] }, V::Absolute(volume), mix);
         }
     }
 
-    // Pitch : maintien pour glisser, R/P pour revenir à zéro.
-    for (deck, plus, minus, reset_key) in [
-        (Deck::A, KeyCode::KeyE, KeyCode::KeyQ, KeyCode::KeyR),
-        (Deck::B, KeyCode::KeyO, KeyCode::KeyU, KeyCode::KeyP),
+    // Pitch : même convention 0..1 que le fader MIDI (0,5 = nominal).
+    for (i, plus, minus, reset_key) in [
+        (0usize, KeyCode::KeyE, KeyCode::KeyQ, KeyCode::KeyR),
+        (1, KeyCode::KeyO, KeyCode::KeyU, KeyCode::KeyP),
     ] {
         let delta = axis(plus, minus) * PITCH_PER_SECOND * dt;
         let reset = keys.just_pressed(reset_key);
         if delta != 0.0 || reset {
-            let pitch = &mut mix.pitch[deck.index()];
-            *pitch = if reset {
+            let pitch = if reset {
                 0.0
             } else {
-                (*pitch + delta).clamp(-PITCH_RANGE, PITCH_RANGE)
+                (mix.pitch[i] + delta).clamp(-PITCH_RANGE, PITCH_RANGE)
             };
-            let _ = eng
-                .ports
-                .commands
-                .push(EngineCommand::SetPitch(deck, f64::from(1.0 + *pitch)));
+            emit(
+                Action::Pitch { deck: DECKS[i] },
+                V::Absolute(pitch / PITCH_RANGE * 0.5 + 0.5),
+                mix,
+            );
         }
     }
 
     let xf_delta = axis(KeyCode::KeyV, KeyCode::KeyC) * CROSSFADER_PER_SECOND * dt;
     if xf_delta != 0.0 {
-        mix.crossfader = (mix.crossfader + xf_delta).clamp(-1.0, 1.0);
-        let _ = eng
-            .ports
-            .commands
-            .push(EngineCommand::SetCrossfader(mix.crossfader));
+        let crossfader = (mix.crossfader + xf_delta).clamp(-1.0, 1.0);
+        emit(Action::CrossFader, V::Absolute(crossfader * 0.5 + 0.5), mix);
     }
 
     let master_delta = axis(KeyCode::Equal, KeyCode::Minus) * MASTER_PER_SECOND * dt;
     if master_delta != 0.0 {
-        mix.master = (mix.master + master_delta).clamp(0.0, 2.0);
-        let _ = eng
-            .ports
-            .commands
-            .push(EngineCommand::SetMasterGain(mix.master));
+        let master = (mix.master + master_delta).clamp(0.0, 2.0);
+        emit(Action::MasterGain, V::Absolute(master), mix);
     }
 
     let cue_mix_delta = axis(KeyCode::KeyM, KeyCode::KeyN) * CUE_MIX_PER_SECOND * dt;
     if cue_mix_delta != 0.0 {
-        mix.cue_mix = (mix.cue_mix + cue_mix_delta).clamp(0.0, 1.0);
-        let _ = eng
-            .ports
-            .commands
-            .push(EngineCommand::SetCueMix(mix.cue_mix));
+        let cue_mix = (mix.cue_mix + cue_mix_delta).clamp(0.0, 1.0);
+        emit(Action::CueMix, V::Absolute(cue_mix), mix);
     }
 
     let hp_delta = axis(KeyCode::KeyK, KeyCode::KeyJ) * HEADPHONE_PER_SECOND * dt;
     if hp_delta != 0.0 {
-        mix.headphone = (mix.headphone + hp_delta).clamp(0.0, 2.0);
-        let _ = eng
-            .ports
-            .commands
-            .push(EngineCommand::SetHeadphoneGain(mix.headphone));
+        let headphone = (mix.headphone + hp_delta).clamp(0.0, 2.0);
+        emit(Action::HeadphoneGain, V::Absolute(headphone), mix);
     }
 }
 
@@ -637,66 +636,4 @@ fn drain_engine(
             }
         }
     }
-}
-
-/// Barre d'état minimale : tout dans le titre de fenêtre, rafraîchi à ~4 Hz.
-/// La vraie barre d'état (specs §6.3) arrive au M6.
-#[allow(clippy::too_many_arguments)] // système Bevy : un paramètre par ressource
-fn update_status(
-    time: Res<Time>,
-    snapshot: Res<LastSnapshot>,
-    decks: Res<Decks>,
-    mix: Res<MixState>,
-    midi: Res<MidiRes>,
-    analyzers: Res<Analyzers>,
-    mut windows: Query<&mut Window>,
-    mut accumulator: Local<f32>,
-) {
-    *accumulator += time.delta_secs();
-    if *accumulator < 0.25 {
-        return;
-    }
-    *accumulator = 0.0;
-
-    let deck_status = |i: usize| -> String {
-        let snap = &snapshot.0.decks[i];
-        let track = decks.tracks[i].as_ref();
-        let name = track.map_or("—", |t| t.name.as_str());
-        let bpm = track
-            .and_then(|t| t.analysis.as_ref())
-            .map_or_else(String::new, |a| format!(" {:.2}bpm", a.bpm));
-        let state = if snap.playing { "▶" } else { "⏸" };
-        let cue = if snap.cue { " CUE" } else { "" };
-        format!(
-            "{state} {} {}/{} {:+.1}%{bpm}{cue}",
-            name,
-            format_time(snap.position_samples),
-            format_time(snap.track_frames),
-            mix.pitch[i] * 100.0,
-        )
-    };
-
-    let vu = analyzers.levels.map_or_else(String::new, |(_, peak)| {
-        format!(" | vu {:.2}", peak[0].max(peak[1]))
-    });
-    let title = format!(
-        "ober — A {} | B {} | xf {:+.2} | master {:.2} | casque {:.2} mix {:.2} | MIDI {}{vu} | underruns {} | charge audio {:.0} %",
-        deck_status(0),
-        deck_status(1),
-        mix.crossfader,
-        mix.master,
-        mix.headphone,
-        mix.cue_mix,
-        midi.controller.as_deref().unwrap_or("—"),
-        snapshot.0.underruns,
-        snapshot.0.callback_load * 100.0
-    );
-    for mut window in &mut windows {
-        window.title = title.clone();
-    }
-}
-
-fn format_time(samples: u64) -> String {
-    let seconds = samples / u64::from(SAMPLE_RATE);
-    format!("{}:{:02}", seconds / 60, seconds % 60)
 }

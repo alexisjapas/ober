@@ -26,6 +26,8 @@ pub enum EngineCommand {
     CueRelease(Deck),
     /// Position absolue en samples (48 kHz), clampée à la fin de piste.
     SeekSamples(Deck, u64),
+    /// Déplacement relatif en samples signés, clampé aux bornes de la piste.
+    SeekRelative(Deck, i64),
     /// Gain linéaire du deck, clampé à `[0, 1]` (courbe appliquée en amont).
     SetDeckVolume(Deck, f32),
     /// Position du crossfader `[-1, 1]` (A pleine gauche → B pleine droite).
