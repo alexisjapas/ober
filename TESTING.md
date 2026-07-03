@@ -72,9 +72,12 @@ mismatch).
 - [ ] Pitch (0x08): ±8 %, **verify the direction** (up = slower expected?)
       and the absence of a jump on the first movement
 - [ ] Jogs: messages arrive (log/debug) — scratching itself: M4
-- [ ] Library from the controller: BROWSER encoder (CC 0xB0 0x01) scrolls,
-      push (0x90 0x00) enters folders (".." row to go up), Load buttons
-      load the selected track
+- [ ] Library from the controller: BROWSER encoder (CC 0xB0 0x01) scrolls
+      the files — or the folders while the file pane is empty (fallback for
+      libraries nested per album); Shift + encoder (CC 0xB3 0x01, hardware
+      shift = channel +3 — **confirm with midi-probe**) scrolls the folder
+      pane; push (0x90 0x00) enters folders (".." row to go up); Load
+      buttons load the selected track
 - [ ] Perceived fader → sound latency: imperceptible (short path §5.1)
 
 ## M4 — Jogs

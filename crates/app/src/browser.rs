@@ -149,10 +149,13 @@ fn spawn_probe_worker() -> (
 }
 
 impl Browser {
-    /// Déplace la sélection de la liste de fichiers (encodeur, flèches,
-    /// molette).
+    /// Moves the file-list selection (encoder, arrows, wheel). Empty file
+    /// list (folder without direct audio files — e.g. a library nested per
+    /// album): fall back to the folder pane, so the primary encoder motion
+    /// walks down the tree instead of spinning on nothing.
     pub fn scroll_by(&mut self, delta: i32) {
         if self.files.is_empty() {
+            self.scroll_dirs_by(delta);
             return;
         }
         let last = self.files.len() - 1;
