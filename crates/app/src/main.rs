@@ -893,11 +893,15 @@ fn midi_sync(
                 };
                 browser.load_selected(deck, &load_tx);
             }
-            (mapping::Action::LibraryScroll, ControlValue::Relative(n)) => browser.scroll_by(n),
+            (mapping::Action::LibraryScroll, ControlValue::Relative(n)) => {
+                browser.encoder_scroll(n);
+            }
             (mapping::Action::LibraryFolderScroll, ControlValue::Relative(n)) => {
                 browser.scroll_dirs_by(n);
             }
-            (mapping::Action::LibraryEnter, ControlValue::Pressed(true)) => browser.enter(),
+            (mapping::Action::LibraryEnter, ControlValue::Pressed(pressed)) => {
+                browser.encoder_press(pressed);
+            }
             _ => {}
         }
         mirror_event(&event, &mut mix);

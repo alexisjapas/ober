@@ -8,9 +8,15 @@
 //!
 //! Same intents on every input (specs §6.4):
 //!
-//! - **controller**: BROWSER encoder = file list, Shift + encoder = folder
-//!   list (selecting a folder instantly previews its files), push = enter
-//!   the selected folder, Load buttons = load the selection;
+//! - **controller**: BROWSER encoder = file list (or the folder list while
+//!   it is empty), **held push + turn** = folder list (selecting a folder
+//!   instantly previews its files), push released without turning = enter
+//!   the selected folder, Load buttons = load the selection. The
+//!   press-and-turn gesture exists because the Inpulse 200 MK2 emits no
+//!   shift layer for its encoder (confirmed with midi-probe) — the whole
+//!   tree must stay walkable from the controller alone (M6 exit
+//!   criterion). Controllers with a real shifted encoder (DDJ-400) also
+//!   emit `LibraryFolderScroll` directly;
 //! - **keyboard**: `B` toggles the keyboard *focus* (focused, the deck
 //!   shortcuts pause): `↑`/`↓` files, `Shift+↑`/`↓` folders, `Entrée`/`→`
 //!   enter, `←`/`Retour` parent, `Échap` unfocus. `F`/`L` load onto A/B
@@ -81,6 +87,11 @@ pub struct Browser {
     file_scroll: usize,
     dirty: bool,
     files_dirty: bool,
+    /// BROWSER encoder push state (press-and-turn = folder pane).
+    encoder_pressed: bool,
+    /// Ticks received while the push was held: the release then does
+    /// *not* enter (the gesture was a folder scroll, not a click).
+    encoder_turned: bool,
     /// Header-probe cache; filled asynchronously by the probe worker.
     meta: HashMap<PathBuf, decode::ProbeInfo>,
     probe_tx: crossbeam_channel::Sender<Vec<PathBuf>>,
@@ -109,6 +120,8 @@ impl Default for Browser {
             file_scroll: 0,
             dirty: true,
             files_dirty: true,
+            encoder_pressed: false,
+            encoder_turned: false,
             meta: HashMap::new(),
             probe_tx,
             probe_results,
@@ -149,6 +162,33 @@ fn spawn_probe_worker() -> (
 }
 
 impl Browser {
+    /// BROWSER encoder tick. Plain turn = file selection; while the push
+    /// is held the encoder drives the folder pane instead (press-and-turn
+    /// — the MK2 encoder has no shift layer, see the module doc).
+    pub fn encoder_scroll(&mut self, delta: i32) {
+        if self.encoder_pressed {
+            self.encoder_turned = true;
+            self.scroll_dirs_by(delta);
+        } else {
+            self.scroll_by(delta);
+        }
+    }
+
+    /// BROWSER encoder push. Entering happens on *release without
+    /// turning*, so a held push can repurpose the encoder for the folder
+    /// pane without also entering a folder on every gesture.
+    pub fn encoder_press(&mut self, pressed: bool) {
+        if pressed {
+            self.encoder_pressed = true;
+            self.encoder_turned = false;
+        } else {
+            if self.encoder_pressed && !self.encoder_turned {
+                self.enter();
+            }
+            self.encoder_pressed = false;
+        }
+    }
+
     /// Moves the file-list selection (encoder, arrows, wheel). Empty file
     /// list (folder without direct audio files — e.g. a library nested per
     /// album): fall back to the folder pane, so the primary encoder motion
