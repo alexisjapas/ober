@@ -47,6 +47,22 @@
             libxrandr
           ]
         );
+
+        # `play [--release] [tracks…]`: runs the `ober` binary (crates/app),
+        # debug by default, optimized with --release. Extra arguments are
+        # forwarded to the app (preloaded track paths). Lives in the dev shell
+        # (inherits LD_LIBRARY_PATH + toolchain); no versioned .sh script.
+        play = pkgs.writeShellScriptBin "play" ''
+          profile=()
+          forward=()
+          for arg in "$@"; do
+            case "$arg" in
+              --release) profile=(--release) ;;
+              *) forward+=("$arg") ;;
+            esac
+          done
+          exec cargo run "''${profile[@]}" -p app -- "''${forward[@]}"
+        '';
       in
       {
         devShells.default = pkgs.mkShell {
@@ -64,6 +80,8 @@
               # Third-party license notices (about.toml) — same tool and version
               # family as the release CI, for local runs of `cargo about generate`.
               pkgs.cargo-about
+              # `play [--release] [tracks…]`: run the app (defined in the `let` above).
+              play
             ]
             ++ lib.optionals stdenv.isLinux (
               with pkgs;
@@ -77,6 +95,11 @@
           # wgpu/winit dlopen vulkan-loader, wayland and libxkbcommon at runtime:
           # they must be visible on the library path.
           LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
+
+          shellHook = ''
+            echo "ober dev shell — $(rustc --version)"
+            echo "  play [--release] [tracks…]  # run the app, debug by default (optional preloaded tracks)"
+          '';
         };
       }
     );

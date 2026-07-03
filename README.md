@@ -22,8 +22,8 @@ The development environment is managed by a nix flake:
 ```sh
 nix develop            # or `direnv allow` if you use direnv
 cargo test --workspace
-cargo run -p app                               # `ober` binary
-cargo run -p app -- track_a.mp3 track_b.flac   # preloaded tracks (optional)
+play                                           # run the `ober` binary (wraps `cargo run -p app`)
+play --release track_a.mp3 track_b.flac        # optimized build, preloaded tracks (optional)
 ```
 
 A full session is driven from the controller (transport, mixing, EQ, pitch,

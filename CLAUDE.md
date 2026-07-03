@@ -17,6 +17,7 @@ nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo fmt --all
 nix develop -c ./scripts/check-bevy-boundary.sh              # Bevy boundary
 nix develop -c cargo run -p app                              # `ober` binary
+nix develop -c play                                          # idem; `--release` for the optimized build
 nix develop -c cargo run -p midi --bin midi-probe            # raw MIDI log
 nix develop -c cargo run -p engine --example audio-probe     # device/buffer probe
 nix develop -c cargo bench -p engine --bench callback        # RT budget
